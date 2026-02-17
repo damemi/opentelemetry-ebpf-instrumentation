@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
@@ -34,6 +35,7 @@ func (d dummyCriterion) RangePodAnnotations() iter.Seq2[string, services.StringM
 func (d dummyCriterion) RangePodLabels() iter.Seq2[string, services.StringMatcher]      { return nil }
 func (d dummyCriterion) IsContainersOnly() bool                                         { return false }
 func (d dummyCriterion) GetPathRegexp() services.StringMatcher                          { return nil }
+func (d dummyCriterion) GetPID() (app.PID, bool)                                        { return 0, false }
 func (d dummyCriterion) GetNamespace() string                                           { return d.namespace }
 func (d dummyCriterion) GetExportModes() services.ExportModes                           { return d.export }
 func (d dummyCriterion) GetSamplerConfig() *services.SamplerConfig                      { return d.sampler }

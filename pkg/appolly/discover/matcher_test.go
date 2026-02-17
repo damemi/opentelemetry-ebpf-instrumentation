@@ -507,6 +507,74 @@ func TestInstrumentation_CoexistingWithDeprecatedServices(t *testing.T) {
 	}
 }
 
+func TestCriteriaMatcher_TargetPIDs(t *testing.T) {
+	t.Run("single PID", func(t *testing.T) {
+		// When TargetPIDs has one PID, only that PID is matched.
+		pipeConfig := obi.Config{
+			TargetPIDs:       obi.TargetPIDs{42},
+			ServiceName:      "targeted-svc",
+			ServiceNamespace: "target-ns",
+		}
+		discoveredProcesses := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
+		filteredProcessesQu := msg.NewQueue[[]Event[ProcessMatch]](msg.ChannelBufferLen(10))
+		filteredProcesses := filteredProcessesQu.Subscribe()
+		matcherFunc, err := criteriaMatcherProvider(&pipeConfig, discoveredProcesses, filteredProcessesQu)(t.Context())
+		require.NoError(t, err)
+		go matcherFunc(t.Context())
+		defer filteredProcessesQu.Close()
+
+		processInfo = func(pp ProcessAttrs) (*services.ProcessInfo, error) {
+			return &services.ProcessInfo{Pid: pp.pid, ExePath: "/any/exe", OpenPorts: pp.openPorts}, nil
+		}
+		discoveredProcesses.Send([]Event[ProcessAttrs]{
+			{Type: EventCreated, Obj: ProcessAttrs{pid: 1, openPorts: []uint32{80}}},
+			{Type: EventCreated, Obj: ProcessAttrs{pid: 42, openPorts: []uint32{}}},
+			{Type: EventCreated, Obj: ProcessAttrs{pid: 100, openPorts: []uint32{443}}},
+		})
+
+		matches := testutil.ReadChannel(t, filteredProcesses, testTimeout)
+		require.Len(t, matches, 1)
+		assert.Equal(t, app.PID(42), matches[0].Obj.Process.Pid)
+		pid, ok := matches[0].Obj.Criteria[0].GetPID()
+		assert.True(t, ok)
+		assert.Equal(t, app.PID(42), pid)
+	})
+
+	t.Run("multiple PIDs", func(t *testing.T) {
+		pipeConfig := obi.Config{
+			TargetPIDs:       obi.TargetPIDs{10, 20, 30},
+			ServiceName:      "multi-svc",
+			ServiceNamespace: "ns",
+		}
+		discoveredProcesses := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
+		filteredProcessesQu := msg.NewQueue[[]Event[ProcessMatch]](msg.ChannelBufferLen(10))
+		filteredProcesses := filteredProcessesQu.Subscribe()
+		matcherFunc, err := criteriaMatcherProvider(&pipeConfig, discoveredProcesses, filteredProcessesQu)(t.Context())
+		require.NoError(t, err)
+		go matcherFunc(t.Context())
+		defer filteredProcessesQu.Close()
+
+		processInfo = func(pp ProcessAttrs) (*services.ProcessInfo, error) {
+			return &services.ProcessInfo{Pid: pp.pid, ExePath: "/any/exe", OpenPorts: pp.openPorts}, nil
+		}
+		discoveredProcesses.Send([]Event[ProcessAttrs]{
+			{Type: EventCreated, Obj: ProcessAttrs{pid: 1}},
+			{Type: EventCreated, Obj: ProcessAttrs{pid: 10}},
+			{Type: EventCreated, Obj: ProcessAttrs{pid: 15}},
+			{Type: EventCreated, Obj: ProcessAttrs{pid: 20}},
+			{Type: EventCreated, Obj: ProcessAttrs{pid: 30}},
+		})
+
+		matches := testutil.ReadChannel(t, filteredProcesses, testTimeout)
+		require.Len(t, matches, 3)
+		pids := make([]app.PID, len(matches))
+		for i, m := range matches {
+			pids[i] = m.Obj.Process.Pid
+		}
+		assert.ElementsMatch(t, []app.PID{10, 20, 30}, pids)
+	})
+}
+
 func TestCriteriaMatcher_Granular(t *testing.T) {
 	pipeConfig := obi.Config{}
 

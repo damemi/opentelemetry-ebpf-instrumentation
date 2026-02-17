@@ -10,6 +10,7 @@ import (
 	"github.com/gobwas/glob"
 	"gopkg.in/yaml.v3"
 
+	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 )
 
@@ -162,6 +163,7 @@ func (ga *GlobAttributes) GetPath() StringMatcher                 { return &ga.P
 func (ga *GlobAttributes) GetLanguages() StringMatcher            { return &ga.Languages }
 func (ga *GlobAttributes) GetPathRegexp() StringMatcher           { return nilMatcher{} }
 func (ga *GlobAttributes) GetOpenPorts() *PortEnum                { return &ga.OpenPorts }
+func (ga *GlobAttributes) GetPID() (app.PID, bool)                { return 0, false }
 func (ga *GlobAttributes) IsContainersOnly() bool                 { return ga.ContainersOnly }
 func (ga *GlobAttributes) MetricsConfig() perapp.SvcMetricsConfig { return ga.Metrics }
 

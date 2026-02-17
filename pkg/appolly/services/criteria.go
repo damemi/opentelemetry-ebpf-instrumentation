@@ -159,6 +159,8 @@ type Selector interface {
 	GetPathRegexp() StringMatcher
 	GetOpenPorts() *PortEnum
 	GetLanguages() StringMatcher
+	// GetPID returns the target PID and true when this selector matches by PID only.
+	GetPID() (app.PID, bool)
 	IsContainersOnly() bool
 	RangeMetadata() iter.Seq2[string, StringMatcher]
 	RangePodLabels() iter.Seq2[string, StringMatcher]

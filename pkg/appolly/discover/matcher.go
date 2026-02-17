@@ -211,6 +211,9 @@ func (m *Matcher) isExcluded(obj *ProcessAttrs, proc *services.ProcessInfo) bool
 
 func (m *Matcher) matchProcess(obj *ProcessAttrs, p *services.ProcessInfo, a services.Selector) bool {
 	log := m.Log.With("pid", p.Pid, "exe", p.ExePath)
+	if pid, ok := a.GetPID(); ok {
+		return p.Pid == pid && m.matchByAttributes(obj, a)
+	}
 	if !a.GetPath().IsSet() && !a.GetLanguages().IsSet() && a.GetOpenPorts().Len() == 0 && len(obj.metadata) == 0 {
 		log.Debug("no Kube metadata, no local selection criteria. Ignoring")
 		return false
@@ -347,6 +350,18 @@ func LogEnricherFindingCriteria(cfg *obi.Config) []services.Selector {
 
 func FindingCriteria(cfg *obi.Config) []services.Selector {
 	logDeprecationAndConflicts(cfg)
+
+	if cfg.TargetPIDs.Len() > 0 {
+		selectors := make([]services.Selector, 0, cfg.TargetPIDs.Len())
+		for _, pid := range cfg.TargetPIDs {
+			selectors = append(selectors, &services.PidSelector{
+				Pid:       app.PID(pid),
+				Name:      cfg.ServiceName,
+				Namespace: cfg.ServiceNamespace,
+			})
+		}
+		return selectors
+	}
 
 	if OnlyDefinesDeprecatedServiceSelection(cfg) {
 		// deprecated use case. Supporting the old discovery > services section when the

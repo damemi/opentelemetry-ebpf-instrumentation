@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 )
 
@@ -166,6 +167,7 @@ func (a *RegexSelector) GetPath() StringMatcher                 { return &a.Path
 func (a *RegexSelector) GetLanguages() StringMatcher            { return &a.Languages }
 func (a *RegexSelector) GetPathRegexp() StringMatcher           { return &a.PathRegexp }
 func (a *RegexSelector) GetOpenPorts() *PortEnum                { return &a.OpenPorts }
+func (a *RegexSelector) GetPID() (app.PID, bool)                { return 0, false }
 func (a *RegexSelector) IsContainersOnly() bool                 { return a.ContainersOnly }
 func (a *RegexSelector) MetricsConfig() perapp.SvcMetricsConfig { return a.Metrics }
 func (a *RegexSelector) RangeMetadata() iter.Seq2[string, StringMatcher] {
