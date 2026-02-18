@@ -535,9 +535,9 @@ func TestCriteriaMatcher_TargetPIDs(t *testing.T) {
 		matches := testutil.ReadChannel(t, filteredProcesses, testTimeout)
 		require.Len(t, matches, 1)
 		assert.Equal(t, app.PID(42), matches[0].Obj.Process.Pid)
-		pid, ok := matches[0].Obj.Criteria[0].GetPID()
+		pids, ok := matches[0].Obj.Criteria[0].GetPIDs()
 		assert.True(t, ok)
-		assert.Equal(t, app.PID(42), pid)
+		assert.Equal(t, []app.PID{42}, pids)
 	})
 
 	t.Run("multiple PIDs", func(t *testing.T) {
