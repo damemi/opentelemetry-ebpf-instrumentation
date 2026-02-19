@@ -66,7 +66,7 @@ type GlobAttributes struct {
 
 	// OpenPorts allows defining a group of ports that this service could open. It accepts a comma-separated
 	// list of port numbers (e.g. 80) and port ranges (e.g. 8080-8089)
-	OpenPorts PortEnum `yaml:"open_ports"`
+	OpenPorts IntEnum `yaml:"open_ports"`
 
 	// Language allows defining services to instrument based on the
 	// programming language they are written in. Use lowercase names, e.g. java,go
@@ -166,7 +166,7 @@ func (ga *GlobAttributes) GetNamespace() string                   { return ga.Na
 func (ga *GlobAttributes) GetPath() StringMatcher                 { return &ga.Path }
 func (ga *GlobAttributes) GetLanguages() StringMatcher            { return &ga.Languages }
 func (ga *GlobAttributes) GetPathRegexp() StringMatcher           { return nilMatcher{} }
-func (ga *GlobAttributes) GetOpenPorts() *PortEnum                { return &ga.OpenPorts }
+func (ga *GlobAttributes) GetOpenPorts() *IntEnum                 { return &ga.OpenPorts }
 func (ga *GlobAttributes) GetPIDs() ([]app.PID, bool)             { return ga.pids() }
 func (ga *GlobAttributes) IsContainersOnly() bool                 { return ga.ContainersOnly }
 func (ga *GlobAttributes) MetricsConfig() perapp.SvcMetricsConfig { return ga.Metrics }

@@ -382,8 +382,8 @@ func TestInstrumentation_CoexistingWithDeprecatedServices(t *testing.T) {
 	neitherPass := services.NewGlob("*/neither-pass")
 	bothPass := services.NewGlob("*/{must,also}-pass")
 
-	passPort := services.PortEnum{Ranges: []services.PortRange{{Start: 80}}}
-	allPorts := services.PortEnum{Ranges: []services.PortRange{{Start: 1, End: 65535}}}
+	passPort := services.IntEnum{Ranges: []services.IntRange{{Start: 80}}}
+	allPorts := services.IntEnum{Ranges: []services.IntRange{{Start: 1, End: 65535}}}
 
 	passRE := services.NewRegexp("must-pass")
 	notPassRE := services.NewRegexp("dont-pass")
@@ -511,7 +511,7 @@ func TestCriteriaMatcher_TargetPIDs(t *testing.T) {
 	t.Run("single PID", func(t *testing.T) {
 		// When TargetPIDs has one PID, only that PID is matched.
 		pipeConfig := obi.Config{
-			TargetPIDs:       obi.TargetPIDs{42},
+			TargetPIDs:       services.IntEnum{Ranges: []services.IntRange{{Start: 42}}},
 			ServiceName:      "targeted-svc",
 			ServiceNamespace: "target-ns",
 		}
@@ -542,7 +542,7 @@ func TestCriteriaMatcher_TargetPIDs(t *testing.T) {
 
 	t.Run("multiple PIDs", func(t *testing.T) {
 		pipeConfig := obi.Config{
-			TargetPIDs:       obi.TargetPIDs{10, 20, 30},
+			TargetPIDs:       services.IntEnum{Ranges: []services.IntRange{{Start: 10}, {Start: 20}, {Start: 30}}},
 			ServiceName:      "multi-svc",
 			ServiceNamespace: "ns",
 		}

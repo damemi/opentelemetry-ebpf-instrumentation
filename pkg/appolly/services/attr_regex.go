@@ -70,7 +70,7 @@ type RegexSelector struct {
 	Namespace string `yaml:"namespace"`
 	// OpenPorts allows defining a group of ports that this service could open. It accepts a comma-separated
 	// list of port numbers (e.g. 80) and port ranges (e.g. 8080-8089)
-	OpenPorts PortEnum `yaml:"open_ports"`
+	OpenPorts IntEnum `yaml:"open_ports"`
 	// PIDs allows selecting processes by PID. When non-empty, the process PID must be in this list (in addition to any path/port criteria).
 	PIDs []uint32 `yaml:"target_pids"`
 	// Path allows defining the regular expression matching the full executable path.
@@ -169,7 +169,7 @@ func (a *RegexSelector) GetNamespace() string                   { return a.Names
 func (a *RegexSelector) GetPath() StringMatcher                 { return &a.Path }
 func (a *RegexSelector) GetLanguages() StringMatcher            { return &a.Languages }
 func (a *RegexSelector) GetPathRegexp() StringMatcher           { return &a.PathRegexp }
-func (a *RegexSelector) GetOpenPorts() *PortEnum                { return &a.OpenPorts }
+func (a *RegexSelector) GetOpenPorts() *IntEnum                 { return &a.OpenPorts }
 func (a *RegexSelector) GetPIDs() ([]app.PID, bool)             { return a.pids() }
 func (a *RegexSelector) IsContainersOnly() bool                 { return a.ContainersOnly }
 func (a *RegexSelector) MetricsConfig() perapp.SvcMetricsConfig { return a.Metrics }

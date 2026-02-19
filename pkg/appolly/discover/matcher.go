@@ -212,13 +212,7 @@ func (m *Matcher) isExcluded(obj *ProcessAttrs, proc *services.ProcessInfo) bool
 func (m *Matcher) matchProcess(obj *ProcessAttrs, p *services.ProcessInfo, a services.Selector) bool {
 	log := m.Log.With("pid", p.Pid, "exe", p.ExePath)
 	if pids, ok := a.GetPIDs(); ok && len(pids) > 0 {
-		if !pidInList(p.Pid, pids) {
-			return false
-		}
-		// PID matches; if this is PID-only criteria, skip path/port checks
-		if !a.GetPath().IsSet() && !a.GetPathRegexp().IsSet() && a.GetOpenPorts().Len() == 0 {
-			return m.matchByAttributes(obj, a)
-		}
+		return pidInList(p.Pid, pids)
 	}
 	if !a.GetPath().IsSet() && !a.GetLanguages().IsSet() && a.GetOpenPorts().Len() == 0 && len(obj.metadata) == 0 {
 		pids, hasPIDs := a.GetPIDs()
@@ -370,9 +364,10 @@ func FindingCriteria(cfg *obi.Config) []services.Selector {
 	logDeprecationAndConflicts(cfg)
 
 	if cfg.TargetPIDs.Len() > 0 {
-		pids := make([]uint32, 0, cfg.TargetPIDs.Len())
-		for _, pid := range cfg.TargetPIDs {
-			pids = append(pids, pid)
+		vals := cfg.TargetPIDs.AllValues()
+		pids := make([]uint32, 0, len(vals))
+		for _, v := range vals {
+			pids = append(pids, uint32(v))
 		}
 		return []services.Selector{
 			&services.GlobAttributes{
