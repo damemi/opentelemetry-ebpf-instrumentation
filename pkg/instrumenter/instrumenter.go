@@ -87,6 +87,10 @@ func setupAppO11y(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.
 		slog.Debug("can't create new instrumenter", "error", err)
 		return fmt.Errorf("can't create new instrumenter: %w", err)
 	}
+	// Notify callers that requested it (e.g. WithTargetPIDsUpdater); they receive the App O11y instrumenter.
+	if ctxInfo.AppO11y.OnTargetPIDsUpdaterReady != nil {
+		ctxInfo.AppO11y.OnTargetPIDsUpdaterReady(instr)
+	}
 
 	if err := instr.FindAndInstrument(ctx); err != nil {
 		slog.Debug("can't find target process", "error", err)

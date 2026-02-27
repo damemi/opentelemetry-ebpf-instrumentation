@@ -6,6 +6,7 @@ package services // import "go.opentelemetry.io/obi/pkg/appolly/services"
 import (
 	"fmt"
 	"iter"
+	"sync"
 
 	"github.com/gobwas/glob"
 	"github.com/invopop/jsonschema"
@@ -92,7 +93,9 @@ type GlobAttributes struct {
 	Languages GlobAttr `yaml:"languages"`
 
 	// PIDs allows selecting processes by PID. When non-empty, the process PID must be in this list (in addition to any path/port criteria).
-	PIDs []uint32 `yaml:"target_pids"`
+	// Updated at runtime via AddPIDs/RemovePIDs; pidsMu protects concurrent access.
+	PIDs   []uint32 `yaml:"target_pids"`
+	pidsMu sync.RWMutex
 
 	// Path allows defining the regular expression matching the full executable path.
 	Path GlobAttr `yaml:"exe_path"`
@@ -240,6 +243,8 @@ func (ga *GlobAttributes) GetSamplerConfig() *SamplerConfig { return ga.SamplerC
 func (ga *GlobAttributes) GetRoutesConfig() *CustomRoutesConfig { return ga.Routes }
 
 func (ga *GlobAttributes) pids() ([]app.PID, bool) {
+	ga.pidsMu.RLock()
+	defer ga.pidsMu.RUnlock()
 	if len(ga.PIDs) == 0 {
 		return nil, false
 	}
@@ -248,6 +253,45 @@ func (ga *GlobAttributes) pids() ([]app.PID, bool) {
 		out[i] = app.PID(pid)
 	}
 	return out, true
+}
+
+// AddPIDs adds PIDs to the selector's list (for runtime add; thread-safe with GetPIDs).
+func (ga *GlobAttributes) AddPIDs(pids ...uint32) {
+	if len(pids) == 0 {
+		return
+	}
+	ga.pidsMu.Lock()
+	defer ga.pidsMu.Unlock()
+	existing := make(map[uint32]struct{}, len(ga.PIDs))
+	for _, p := range ga.PIDs {
+		existing[p] = struct{}{}
+	}
+	for _, u := range pids {
+		if _, ok := existing[u]; !ok {
+			existing[u] = struct{}{}
+			ga.PIDs = append(ga.PIDs, u)
+		}
+	}
+}
+
+// RemovePIDs removes PIDs from the selector's list (for runtime remove; thread-safe with GetPIDs).
+func (ga *GlobAttributes) RemovePIDs(pids ...uint32) {
+	if len(pids) == 0 {
+		return
+	}
+	toRemove := make(map[uint32]struct{})
+	for _, u := range pids {
+		toRemove[u] = struct{}{}
+	}
+	ga.pidsMu.Lock()
+	defer ga.pidsMu.Unlock()
+	newPids := ga.PIDs[:0]
+	for _, p := range ga.PIDs {
+		if _, remove := toRemove[p]; !remove {
+			newPids = append(newPids, p)
+		}
+	}
+	ga.PIDs = newPids
 }
 
 type nilMatcher struct{}

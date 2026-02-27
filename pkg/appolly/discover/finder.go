@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
+	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/ebpf"
 	ebpfcommon "go.opentelemetry.io/obi/pkg/ebpf/common"
 	"go.opentelemetry.io/obi/pkg/export/imetrics"
@@ -42,6 +43,7 @@ func NewProcessFinder(
 
 type processFinderStartConfig struct {
 	enrichedProcessEvents *msg.Queue[[]Event[ProcessAttrs]]
+	pidSelector           services.Selector
 }
 
 // ProcessFinderStartOpt allows overriding some internal behavior of ProcessFinder.Start method.
@@ -54,6 +56,14 @@ type ProcessFinderStartOpt func(*processFinderStartConfig)
 func WithEnrichedProcessEvents(enrichedProcessEvents *msg.Queue[[]Event[ProcessAttrs]]) ProcessFinderStartOpt {
 	return func(cfg *processFinderStartConfig) {
 		cfg.enrichedProcessEvents = enrichedProcessEvents
+	}
+}
+
+// WithPIDSelector supplies an additional selector for PID-based discovery. When non-nil, it is prepended
+// to the criteria from config (e.g. Instrumenter passes a GlobAttributes; use AddPIDs/RemovePIDs for runtime updates).
+func WithPIDSelector(selector services.Selector) ProcessFinderStartOpt {
+	return func(cfg *processFinderStartConfig) {
+		cfg.pidSelector = selector
 	}
 }
 
@@ -70,7 +80,7 @@ func (pf *ProcessFinder) Start(ctx context.Context, opts ...ProcessFinderStartOp
 	swi := swarm.Instancer{}
 	processEvents := msgh.QueueFromConfig[[]Event[ProcessAttrs]](pf.cfg, "processEvents")
 
-	swi.Add(swarm.DirectInstance(ProcessWatcherFunc(pf.cfg, pf.ebpfEventContext, processEvents)),
+	swi.Add(swarm.DirectInstance(ProcessWatcherFunc(pf.cfg, pf.ebpfEventContext, processEvents, startConfig.pidSelector)),
 		swarm.WithID("ProcessWatcher"))
 
 	kubeEnrichedEvents := msgh.QueueFromConfig[[]Event[ProcessAttrs]](pf.cfg, "kubeEnrichedEvents")
@@ -96,7 +106,7 @@ func (pf *ProcessFinder) Start(ctx context.Context, opts ...ProcessFinderStartOp
 	), swarm.WithID("LanguageDecoratorProvider"))
 
 	criteriaFilteredEvents := msgh.QueueFromConfig[[]Event[ProcessMatch]](pf.cfg, "criteriaFilteredEvents")
-	swi.Add(criteriaMatcherProvider(pf.cfg, langEnrichedEvents, criteriaFilteredEvents),
+	swi.Add(criteriaMatcherProvider(pf.cfg, langEnrichedEvents, criteriaFilteredEvents, startConfig.pidSelector),
 		swarm.WithID("CriteriaMatcher"))
 
 	executableTypes := msgh.QueueFromConfig[[]Event[ebpf.Instrumentable]](pf.cfg, "executableTypes")

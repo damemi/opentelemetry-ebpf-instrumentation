@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
 	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/appolly/discover/exec"
+	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/appolly/traces"
 	"go.opentelemetry.io/obi/pkg/ebpf"
 	ebpfcommon "go.opentelemetry.io/obi/pkg/ebpf/common"
@@ -51,7 +52,10 @@ type Instrumenter struct {
 	// global data structures for all eBPF tracers
 	ebpfEventContext *ebpfcommon.EBPFEventContext
 
-	finishers []finisher
+	// pidSelector is the PID criteria passed to discovery; this Instrumenter implements TargetPIDsUpdater
+	// (AddTargetPIDs/RemoveTargetPIDs) so callers who use WithTargetPIDsUpdater receive this instance.
+	pidSelector services.Selector // *services.GlobAttributes always set; PIDs from config or empty, updated at runtime via AddPIDs/RemovePIDs
+	finishers   []finisher
 }
 
 type finisher struct {
@@ -96,7 +100,15 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 		return nil, fmt.Errorf("can't instantiate instrumentation pipeline: %w", err)
 	}
 
-	return &Instrumenter{
+	var initialPIDs []uint32
+	if config.TargetPIDs.Len() > 0 {
+		initial := config.TargetPIDs.AllValues()
+		initialPIDs = make([]uint32, len(initial))
+		for i, p := range initial {
+			initialPIDs[i] = uint32(p)
+		}
+	}
+	instr := &Instrumenter{
 		config:            config,
 		ctxInfo:           ctxInfo,
 		tracersWg:         &sync.WaitGroup{},
@@ -105,7 +117,13 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 		bp:                bp,
 		peGraphBuilder:    swi,
 		ebpfEventContext:  ebpfcommon.NewEBPFEventContext(),
-	}, nil
+		pidSelector: &services.GlobAttributes{
+			Name:      config.ServiceName,
+			Namespace: config.ServiceNamespace,
+			PIDs:      initialPIDs,
+		},
+	}
+	return instr, nil
 }
 
 // FindAndInstrument searches in background for any new executable matching the
@@ -114,7 +132,8 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 // This is: when the context is cancelled, it has unloaded all the eBPF probes.
 func (i *Instrumenter) FindAndInstrument(ctx context.Context) error {
 	finder := discover.NewProcessFinder(i.config, i.ctxInfo, i.tracesInput, i.ebpfEventContext)
-	processEvents, err := finder.Start(ctx)
+	opts := []discover.ProcessFinderStartOpt{discover.WithPIDSelector(i.pidSelector)}
+	processEvents, err := finder.Start(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("couldn't start Process Finder: %w", err)
 	}
@@ -251,5 +270,32 @@ func refreshK8sInformerCache(ctx context.Context, ctxInfo *global.ContextInfo) e
 }
 
 func (i *Instrumenter) processEventsPipeline(ctx context.Context, graph *swarm.Runner) {
-	graph.Start(ctx, swarm.WithCancelTimeout(i.config.ShutdownTimeout)) // zurulao
+	graph.Start(ctx, swarm.WithCancelTimeout(i.config.ShutdownTimeout))
+}
+
+// AddTargetPIDs adds PIDs to the set of target PIDs instrumented at runtime.
+// Part of TargetPIDsUpdater; callers receive this Instrumenter via WithTargetPIDsUpdater.
+// Works with any config; the PID selector is always present and picks up new PIDs on the next discovery poll.
+func (i *Instrumenter) AddTargetPIDs(pids ...int) {
+	if len(pids) == 0 {
+		return
+	}
+	u32 := make([]uint32, len(pids))
+	for j, p := range pids {
+		u32[j] = uint32(p)
+	}
+	i.pidSelector.AddPIDs(u32...)
+}
+
+// RemoveTargetPIDs removes PIDs from the set of target PIDs. Removed PIDs stop being
+// matched on the next discovery poll. Part of TargetPIDsUpdater; callers receive this Instrumenter via WithTargetPIDsUpdater.
+func (i *Instrumenter) RemoveTargetPIDs(pids ...int) {
+	if len(pids) == 0 {
+		return
+	}
+	u32 := make([]uint32, len(pids))
+	for j, p := range pids {
+		u32[j] = uint32(p)
+	}
+	i.pidSelector.RemovePIDs(u32...)
 }

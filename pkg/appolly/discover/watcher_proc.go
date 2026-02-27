@@ -67,8 +67,8 @@ func wplog() *slog.Logger {
 }
 
 // ProcessWatcherFunc polls every PollInterval for new processes and forwards either new or deleted process PIDs
-// as well as PIDs from processes that setup a new connection
-func ProcessWatcherFunc(cfg *obi.Config, ebpfContext *ebpfcommon.EBPFEventContext, output *msg.Queue[[]Event[ProcessAttrs]]) swarm.RunFunc {
+// as well as PIDs from processes that setup a new connection.
+func ProcessWatcherFunc(cfg *obi.Config, ebpfContext *ebpfcommon.EBPFEventContext, output *msg.Queue[[]Event[ProcessAttrs]], pidSelector services.Selector) swarm.RunFunc {
 	acc := pollAccounter{
 		cfg:               cfg,
 		output:            output,
@@ -82,7 +82,7 @@ func ProcessWatcherFunc(cfg *obi.Config, ebpfContext *ebpfcommon.EBPFEventContex
 		fetchPorts:        true,  // must be true until we've activated the bpf watcher component
 		bpfWatcherEnabled: false, // async set by listening on the bpfWatchEvents channel
 		stateMux:          sync.Mutex{},
-		findingCriteria:   FindingCriteria(cfg),
+		findingCriteria:   FindingCriteria(cfg, pidSelector),
 		ebpfContext:       ebpfContext,
 	}
 	if acc.interval == 0 {

@@ -64,4 +64,8 @@ type ContextInfo struct {
 type AppO11y struct {
 	// ReportRoutes sets whether the metrics should set the http.route attribute
 	ReportRoutes bool
+	// OnTargetPIDsUpdaterReady, when set, is called with the App O11y instrumenter after it is created.
+	// Callers receive that instrumenter (it implements TargetPIDsUpdater by default) and may store it
+	// to add or remove target PIDs at runtime.
+	OnTargetPIDsUpdaterReady func(any)
 }

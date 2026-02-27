@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/discover"
@@ -44,4 +45,37 @@ func TestProcessEventsLoopDoesntBlock(t *testing.T) {
 	}
 
 	assert.NoError(t, err)
+}
+
+// targetPIDsUpdater is the same as instrumenter.TargetPIDsUpdater; used to avoid import cycle.
+type targetPIDsUpdater interface {
+	AddTargetPIDs(pids ...int)
+	RemoveTargetPIDs(pids ...int)
+}
+
+func TestInstrumenter_ImplementsTargetPIDsUpdater(t *testing.T) {
+	instr, err := New(
+		t.Context(),
+		&global.ContextInfo{Prometheus: &connector.PrometheusManager{}},
+		&obi.Config{ChannelBufferLen: 1, Traces: otelcfg.TracesConfig{TracesEndpoint: "http://localhost"}},
+	)
+	require.NoError(t, err)
+	var _ targetPIDsUpdater = instr
+}
+
+func TestInstrumenter_AddTargetPIDs_RemoveTargetPIDs(t *testing.T) {
+	instr, err := New(
+		t.Context(),
+		&global.ContextInfo{Prometheus: &connector.PrometheusManager{}},
+		&obi.Config{ChannelBufferLen: 1, Traces: otelcfg.TracesConfig{TracesEndpoint: "http://localhost"}},
+	)
+	require.NoError(t, err)
+
+	// AddTargetPIDs and RemoveTargetPIDs should not panic; instrumenter always has pidSelector
+	instr.AddTargetPIDs(1, 2, 3)
+	instr.AddTargetPIDs(2, 4) // 2 duplicate, 4 new
+	instr.RemoveTargetPIDs(2)
+	instr.RemoveTargetPIDs(99) // not present, no-op
+	instr.AddTargetPIDs()      // no-op
+	instr.RemoveTargetPIDs()   // no-op
 }

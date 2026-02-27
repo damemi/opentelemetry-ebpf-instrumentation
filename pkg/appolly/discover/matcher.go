@@ -34,11 +34,12 @@ func criteriaMatcherProvider(
 	cfg *obi.Config,
 	input *msg.Queue[[]Event[ProcessAttrs]],
 	output *msg.Queue[[]Event[ProcessMatch]],
+	pidSelector services.Selector,
 ) swarm.InstanceFunc {
 	instrumenterNamespace, _ := namespaceFetcherFunc(app.PID(osPidFunc()))
 	m := &Matcher{
 		Log:                 slog.With("component", "discover.CriteriaMatcher"),
-		Criteria:            FindingCriteria(cfg),
+		Criteria:            FindingCriteria(cfg, pidSelector),
 		ExcludeCriteria:     ExcludingCriteria(cfg),
 		LogEnricherCriteria: LogEnricherFindingCriteria(cfg),
 		ProcessHistory:      map[app.PID]ProcessMatch{},
@@ -372,8 +373,29 @@ func LogEnricherFindingCriteria(cfg *obi.Config) []services.Selector {
 	return selectors
 }
 
-func FindingCriteria(cfg *obi.Config) []services.Selector {
+// FindingCriteria returns discovery criteria from config. When pidSelector is non-nil
+// and has PIDs (e.g. Instrumenter's GlobAttributes with target_pids or runtime AddPIDs),
+// it is the only criterion: config target PIDs are prefilled into it and it is returned alone.
+// When pidSelector is nil or has no PIDs (standalone config with discovery.instrument, no target_pids),
+// config-based criteria (discovery.instrument, etc.) are used so processes are still discovered.
+func FindingCriteria(cfg *obi.Config, pidSelector services.Selector) []services.Selector {
 	logDeprecationAndConflicts(cfg)
+
+	if pidSelector != nil {
+		if cfg.TargetPIDs.Len() > 0 {
+			vals := cfg.TargetPIDs.AllValues()
+			pids := make([]uint32, 0, len(vals))
+			for _, v := range vals {
+				pids = append(pids, uint32(v))
+			}
+			pidSelector.AddPIDs(pids...)
+		}
+		// Use pidSelector as the only criterion only when it has effective PID criteria.
+		// Otherwise (e.g. Instrumenter started with no target_pids) use config-based discovery.
+		if pids, ok := pidSelector.GetPIDs(); ok && len(pids) > 0 {
+			return []services.Selector{pidSelector}
+		}
+	}
 
 	if cfg.TargetPIDs.Len() > 0 {
 		vals := cfg.TargetPIDs.AllValues()
