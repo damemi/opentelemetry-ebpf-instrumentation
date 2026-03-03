@@ -596,17 +596,34 @@ release: artifact
 	@if [ ! -x $(RELEASE_DIR)/verify-$(GOARCH)/$(CMD) ]; then echo "ERROR: $(CMD) binary not executable in $(GOARCH) archive"; exit 1; fi
 	@echo "✓ Archive $(GOARCH) verified successfully"
 	@rm -rf $(RELEASE_DIR)/verify-$(GOARCH)
+	@$(MAKE) release-checksums
+	@echo "### Release artifacts ready in $(RELEASE_DIR)/"
+	@ls -lh $(RELEASE_DIR)/
+
+.PHONY: release-source
+RELEASE_SOURCE_VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || git symbolic-ref --short -q HEAD || echo main)
+release-source: docker-generate java-docker-build
+	@./scripts/release-source.sh --release-version "$(RELEASE_SOURCE_VERSION)" --release-dir "$(RELEASE_DIR)"
+	@$(MAKE) release-checksums RELEASE_VERSION=$(RELEASE_SOURCE_VERSION)
+
+.PHONY: release-checksums
+release-checksums:
 	@echo "### Generating checksums"
-	@if command -v sha256sum >/dev/null 2>&1; then \
-		cd $(RELEASE_DIR) && sha256sum obi-$(RELEASE_VERSION)-$(GOOS)-*.tar.gz > SHA256SUMS; \
+	@mkdir -p $(RELEASE_DIR)
+	@cd $(RELEASE_DIR) && \
+	files=$$(find . -maxdepth 1 -name 'obi-$(RELEASE_VERSION)-*.tar.gz' | sed 's|^\./||' | sort) && \
+	if [ -z "$$files" ]; then \
+		echo "ERROR: No release archives found for obi-$(RELEASE_VERSION)-*.tar.gz in $(RELEASE_DIR)"; \
+		exit 1; \
+	fi && \
+	if command -v sha256sum >/dev/null 2>&1; then \
+		printf '%s\n' "$$files" | xargs sha256sum > SHA256SUMS; \
 	elif command -v shasum >/dev/null 2>&1; then \
-		cd $(RELEASE_DIR) && shasum -a 256 obi-$(RELEASE_VERSION)-$(GOOS)-*.tar.gz > SHA256SUMS; \
+		printf '%s\n' "$$files" | xargs shasum -a 256 > SHA256SUMS; \
 	else \
 		echo "ERROR: Neither sha256sum nor shasum found. Please install coreutils or use macOS builtin shasum."; \
 		exit 1; \
 	fi
-	@echo "### Release artifacts ready in $(RELEASE_DIR)/"
-	@ls -lh $(RELEASE_DIR)/
 
 .PHONY: clean-release-dir
 clean-release-dir:
