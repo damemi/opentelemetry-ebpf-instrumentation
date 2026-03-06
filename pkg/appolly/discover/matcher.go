@@ -30,16 +30,20 @@ var (
 )
 
 // criteriaMatcherProvider filters the processes that match the discovery criteria.
+// If pidSelectorChangeNotify is non-nil, the matcher listens to removed-PID notifications
+// and runs synthetic deletes only when notified, not on every batch.
 func criteriaMatcherProvider(
 	cfg *obi.Config,
 	input *msg.Queue[[]Event[ProcessAttrs]],
 	output *msg.Queue[[]Event[ProcessMatch]],
 	pidSelector services.Selector,
+	pidSelectorChangeNotify <-chan []app.PID,
 ) swarm.InstanceFunc {
 	instrumenterNamespace, _ := namespaceFetcherFunc(app.PID(osPidFunc()))
+	criteria := FindingCriteria(cfg, pidSelector)
 	m := &Matcher{
 		Log:                 slog.With("component", "discover.CriteriaMatcher"),
-		Criteria:            FindingCriteria(cfg, pidSelector),
+		Criteria:            criteria,
 		ExcludeCriteria:     ExcludingCriteria(cfg),
 		LogEnricherCriteria: LogEnricherFindingCriteria(cfg),
 		ProcessHistory:      map[app.PID]ProcessMatch{},
@@ -47,6 +51,7 @@ func criteriaMatcherProvider(
 		Output:              output,
 		Namespace:           instrumenterNamespace,
 		HasHostPidAccess:    hasHostPidAccess(),
+		RemovedPIDsNotify:   pidSelectorChangeNotify,
 	}
 	return swarm.DirectInstance(m.Run)
 }
@@ -66,6 +71,9 @@ type Matcher struct {
 	Output           *msg.Queue[[]Event[ProcessMatch]]
 	Namespace        string
 	HasHostPidAccess bool
+	// RemovedPIDsNotify, when set, carries the PIDs removed from the dynamic selector so the
+	// matcher can emit targeted synthetic deletes without rescanning ProcessHistory.
+	RemovedPIDsNotify <-chan []app.PID
 }
 
 // ProcessMatch matches a found process with the first selection criteria it fulfilled.
@@ -82,6 +90,10 @@ func (pm ProcessMatch) LogEnricherEnabled() bool {
 func (m *Matcher) Run(ctx context.Context) {
 	defer m.Output.Close()
 	m.Log.Debug("starting criteria matcher node")
+	if m.RemovedPIDsNotify != nil {
+		m.runWithNotify(ctx)
+		return
+	}
 	swarms.ForEachInput(ctx, m.Input, m.Log.Debug, func(i []Event[ProcessAttrs]) {
 		m.Log.Debug("filtering processes", "len", len(i))
 		o := m.filter(i)
@@ -90,6 +102,33 @@ func (m *Matcher) Run(ctx context.Context) {
 			m.Output.Send(o)
 		}
 	})
+}
+
+func (m *Matcher) runWithNotify(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			m.Log.Debug("context done, stopping node")
+			return
+		case i, ok := <-m.Input:
+			if !ok {
+				m.Log.Debug("input channel closed, stopping node")
+				return
+			}
+			m.Log.Debug("filtering processes", "len", len(i))
+			o := m.filter(i)
+			m.Log.Debug("processes matching selection criteria", "len", len(o))
+			if len(o) > 0 {
+				m.Output.Send(o)
+			}
+		case removedPIDs := <-m.RemovedPIDsNotify:
+			o := m.syntheticDeletesForRemovedPIDs(removedPIDs)
+			if len(o) > 0 {
+				m.Log.Debug("synthetic deletes for removed PIDs", "len", len(o))
+				m.Output.Send(o)
+			}
+		}
+	}
 }
 
 func (m *Matcher) filter(events []Event[ProcessAttrs]) []Event[ProcessMatch] {
@@ -106,6 +145,27 @@ func (m *Matcher) filter(events []Event[ProcessAttrs]) []Event[ProcessMatch] {
 		}
 	}
 	return matches
+}
+
+// syntheticDeletesForRemovedPIDs returns EventDeleted for the specific PIDs removed from the
+// dynamic selector. This is the matcher side of the edge-based removal path: the selector sends
+// the exact removed PIDs, so we can look them up directly instead of doing a level-based scan of
+// ProcessHistory against the selector's current PID set.
+func (m *Matcher) syntheticDeletesForRemovedPIDs(removedPIDs []app.PID) []Event[ProcessMatch] {
+	if len(removedPIDs) == 0 {
+		return nil
+	}
+	var out []Event[ProcessMatch]
+	for _, pid := range removedPIDs {
+		procMatch, instrumented := m.ProcessHistory[pid]
+		if !instrumented {
+			continue
+		}
+		delete(m.ProcessHistory, pid)
+		m.Log.Debug("pid removed from dynamic selector, uninstrumenting", "pid", pid, "comm", procMatch.Process.ExePath)
+		out = append(out, Event[ProcessMatch]{Type: EventDeleted, Obj: procMatch})
+	}
+	return out
 }
 
 func (m *Matcher) alreadyMatched(pid app.PID) bool {

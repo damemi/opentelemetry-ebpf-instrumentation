@@ -96,6 +96,9 @@ type GlobAttributes struct {
 	// Updated at runtime via AddPIDs/RemovePIDs; pidsMu protects concurrent access.
 	PIDs   []uint32 `yaml:"target_pids"`
 	pidsMu sync.RWMutex
+	// pidsChangeNotify, when set, receives the PIDs actually removed from the selector so the matcher can
+	// uninstrument them without rescanning all tracked PIDs.
+	pidsChangeNotify chan<- []app.PID
 
 	// Path allows defining the regular expression matching the full executable path.
 	Path GlobAttr `yaml:"exe_path"`
@@ -274,6 +277,25 @@ func (ga *GlobAttributes) AddPIDs(pids ...uint32) {
 	}
 }
 
+// SetPIDsChangeNotify sets the channel to notify with the PIDs removed from the selector.
+// Used by the discover matcher to emit targeted synthetic deletes when the PID list changes.
+func (ga *GlobAttributes) SetPIDsChangeNotify(ch chan<- []app.PID) {
+	ga.pidsChangeNotify = ch
+}
+
+func (ga *GlobAttributes) notifyPIDsChanged(removedPIDs []app.PID) {
+	if ga.pidsChangeNotify == nil || len(removedPIDs) == 0 {
+		return
+	}
+	// This channel is edge-based: it carries the exact removal that just happened.
+	// That avoids the matcher doing a level-based recompute by scanning all tracked
+	// PIDs against the selector's current state after every change.
+	//
+	// Because the payload is the removal event itself, dropping sends would lose
+	// information. We therefore use a blocking send instead of a best-effort wakeup.
+	ga.pidsChangeNotify <- removedPIDs
+}
+
 // RemovePIDs removes PIDs from the selector's list (for runtime remove; thread-safe with GetPIDs).
 func (ga *GlobAttributes) RemovePIDs(pids ...uint32) {
 	if len(pids) == 0 {
@@ -284,14 +306,18 @@ func (ga *GlobAttributes) RemovePIDs(pids ...uint32) {
 		toRemove[u] = struct{}{}
 	}
 	ga.pidsMu.Lock()
-	defer ga.pidsMu.Unlock()
 	newPids := ga.PIDs[:0]
+	removedPIDs := make([]app.PID, 0, len(pids))
 	for _, p := range ga.PIDs {
 		if _, remove := toRemove[p]; !remove {
 			newPids = append(newPids, p)
+			continue
 		}
+		removedPIDs = append(removedPIDs, app.PID(p))
 	}
 	ga.PIDs = newPids
+	ga.pidsMu.Unlock()
+	ga.notifyPIDsChanged(removedPIDs)
 }
 
 type nilMatcher struct{}

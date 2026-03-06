@@ -51,6 +51,7 @@ func TestProcessEventsLoopDoesntBlock(t *testing.T) {
 type targetPIDsUpdater interface {
 	AddTargetPIDs(pids ...int)
 	RemoveTargetPIDs(pids ...int)
+	TargetPIDs() []app.PID
 }
 
 func TestInstrumenter_ImplementsTargetPIDsUpdater(t *testing.T) {
@@ -78,4 +79,22 @@ func TestInstrumenter_AddTargetPIDs_RemoveTargetPIDs(t *testing.T) {
 	instr.RemoveTargetPIDs(99) // not present, no-op
 	instr.AddTargetPIDs()      // no-op
 	instr.RemoveTargetPIDs()   // no-op
+
+	assert.Equal(t, []app.PID{1, 3, 4}, instr.TargetPIDs())
+}
+
+func TestInstrumenter_TargetPIDs_ReturnsCopy(t *testing.T) {
+	instr, err := New(
+		t.Context(),
+		&global.ContextInfo{Prometheus: &connector.PrometheusManager{}},
+		&obi.Config{ChannelBufferLen: 1, Traces: otelcfg.TracesConfig{TracesEndpoint: "http://localhost"}},
+	)
+	require.NoError(t, err)
+
+	instr.AddTargetPIDs(7, 8)
+	got := instr.TargetPIDs()
+	require.Equal(t, []app.PID{7, 8}, got)
+
+	got[0] = 999
+	assert.Equal(t, []app.PID{7, 8}, instr.TargetPIDs())
 }
