@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/obi/pkg/appolly"
+	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
 	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/appolly/discover/exec"
@@ -132,7 +133,14 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 // This is: when the context is cancelled, it has unloaded all the eBPF probes.
 func (i *Instrumenter) FindAndInstrument(ctx context.Context) error {
 	finder := discover.NewProcessFinder(i.config, i.ctxInfo, i.tracesInput, i.ebpfEventContext)
-	opts := []discover.ProcessFinderStartOpt{discover.WithPIDSelector(i.pidSelector)}
+	pidSelectorChangeNotify := make(chan []app.PID, 1)
+	opts := []discover.ProcessFinderStartOpt{
+		discover.WithPIDSelector(i.pidSelector),
+		discover.WithPIDSelectorChangeNotifier(pidSelectorChangeNotify),
+	}
+	if ga, ok := i.pidSelector.(*services.GlobAttributes); ok {
+		ga.SetPIDsChangeNotify(pidSelectorChangeNotify)
+	}
 	processEvents, err := finder.Start(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("couldn't start Process Finder: %w", err)
@@ -275,7 +283,7 @@ func (i *Instrumenter) processEventsPipeline(ctx context.Context, graph *swarm.R
 
 // AddTargetPIDs adds PIDs to the set of target PIDs instrumented at runtime.
 // Part of TargetPIDsUpdater; callers receive this Instrumenter via WithTargetPIDsUpdater.
-// Works with any config; the PID selector is always present and picks up new PIDs on the next discovery poll.
+// Works with any config; the PID selector picks up new PIDs on the next discovery poll.
 func (i *Instrumenter) AddTargetPIDs(pids ...int) {
 	if len(pids) == 0 {
 		return
@@ -287,8 +295,20 @@ func (i *Instrumenter) AddTargetPIDs(pids ...int) {
 	i.pidSelector.AddPIDs(u32...)
 }
 
-// RemoveTargetPIDs removes PIDs from the set of target PIDs. Removed PIDs stop being
-// matched on the next discovery poll. Part of TargetPIDsUpdater; callers receive this Instrumenter via WithTargetPIDsUpdater.
+// TargetPIDs returns the currently tracked target PIDs as a copy.
+// Part of TargetPIDsUpdater.
+func (i *Instrumenter) TargetPIDs() []app.PID {
+	pids, ok := i.pidSelector.GetPIDs()
+	if !ok || len(pids) == 0 {
+		return nil
+	}
+	out := make([]app.PID, len(pids))
+	copy(out, pids)
+	return out
+}
+
+// RemoveTargetPIDs removes PIDs from the set of target PIDs. The selector (GlobAttributes) notifies
+// the matcher so the attacher uninstruments them immediately. Part of TargetPIDsUpdater.
 func (i *Instrumenter) RemoveTargetPIDs(pids ...int) {
 	if len(pids) == 0 {
 		return

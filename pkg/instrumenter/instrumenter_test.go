@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
 	"go.opentelemetry.io/obi/pkg/obi"
@@ -120,6 +121,7 @@ func TestRun_WithTargetPIDsUpdater_DynamicUpdate(t *testing.T) {
 			u.AddTargetPIDs(42, 200) // duplicate 42, new 200
 			u.RemoveTargetPIDs(42)
 			u.RemoveTargetPIDs(999) // not present, no-op
+			assert.Equal(t, []app.PID{100, 200}, u.TargetPIDs())
 			receivedUpdater = true
 		}),
 	}

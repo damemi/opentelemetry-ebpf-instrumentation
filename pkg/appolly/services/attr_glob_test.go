@@ -62,3 +62,32 @@ func TestGlobAttributes_AddPIDs_RemovePIDs_emptyNoOp(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []app.PID{1, 2, 3}, pids)
 }
+
+func TestGlobAttributes_RemovePIDs_NotifyRemovedPIDs(t *testing.T) {
+	ga := &GlobAttributes{PIDs: []uint32{1, 2, 3}}
+	removedPIDs := make(chan []app.PID, 1)
+	ga.SetPIDsChangeNotify(removedPIDs)
+
+	ga.AddPIDs(4)
+	select {
+	case got := <-removedPIDs:
+		t.Fatalf("unexpected add notification: %v", got)
+	default:
+	}
+
+	ga.RemovePIDs(2, 4, 99)
+
+	select {
+	case got := <-removedPIDs:
+		assert.Equal(t, []app.PID{2, 4}, got)
+	default:
+		t.Fatal("expected removed PID notification")
+	}
+
+	ga.RemovePIDs(99)
+	select {
+	case got := <-removedPIDs:
+		t.Fatalf("unexpected remove notification for missing pid: %v", got)
+	default:
+	}
+}

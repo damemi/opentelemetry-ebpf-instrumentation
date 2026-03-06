@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
 	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/ebpf"
@@ -42,8 +43,9 @@ func NewProcessFinder(
 }
 
 type processFinderStartConfig struct {
-	enrichedProcessEvents *msg.Queue[[]Event[ProcessAttrs]]
-	pidSelector           services.Selector
+	enrichedProcessEvents   *msg.Queue[[]Event[ProcessAttrs]]
+	pidSelector             services.Selector
+	pidSelectorChangeNotify <-chan []app.PID
 }
 
 // ProcessFinderStartOpt allows overriding some internal behavior of ProcessFinder.Start method.
@@ -64,6 +66,15 @@ func WithEnrichedProcessEvents(enrichedProcessEvents *msg.Queue[[]Event[ProcessA
 func WithPIDSelector(selector services.Selector) ProcessFinderStartOpt {
 	return func(cfg *processFinderStartConfig) {
 		cfg.pidSelector = selector
+	}
+}
+
+// WithPIDSelectorChangeNotifier provides a channel the matcher listens to; when the caller sends the
+// removed PIDs on it, the matcher emits targeted synthetic deletes so the attacher uninstruments them
+// immediately instead of rescanning all tracked PIDs.
+func WithPIDSelectorChangeNotifier(ch <-chan []app.PID) ProcessFinderStartOpt {
+	return func(cfg *processFinderStartConfig) {
+		cfg.pidSelectorChangeNotify = ch
 	}
 }
 
@@ -106,7 +117,7 @@ func (pf *ProcessFinder) Start(ctx context.Context, opts ...ProcessFinderStartOp
 	), swarm.WithID("LanguageDecoratorProvider"))
 
 	criteriaFilteredEvents := msgh.QueueFromConfig[[]Event[ProcessMatch]](pf.cfg, "criteriaFilteredEvents")
-	swi.Add(criteriaMatcherProvider(pf.cfg, langEnrichedEvents, criteriaFilteredEvents, startConfig.pidSelector),
+	swi.Add(criteriaMatcherProvider(pf.cfg, langEnrichedEvents, criteriaFilteredEvents, startConfig.pidSelector, startConfig.pidSelectorChangeNotify),
 		swarm.WithID("CriteriaMatcher"))
 
 	executableTypes := msgh.QueueFromConfig[[]Event[ebpf.Instrumentable]](pf.cfg, "executableTypes")
