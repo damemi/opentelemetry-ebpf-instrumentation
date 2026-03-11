@@ -102,9 +102,7 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 	if v := ctxInfo.AppO11y.DynamicPIDSelector; v != nil {
 		sel = v.(*discover.DynamicPIDSelector)
 	}
-	if sel == nil {
-		sel = discover.NewDynamicPIDSelector()
-	}
+	// When sel is nil, finder gets nil: config target_pids are used as static criteria (FindingCriteria(cfg, false)).
 	instr := &Instrumenter{
 		config:              config,
 		ctxInfo:             ctxInfo,
