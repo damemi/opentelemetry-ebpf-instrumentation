@@ -47,54 +47,26 @@ func TestProcessEventsLoopDoesntBlock(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// targetPIDsUpdater is the same as instrumenter.TargetPIDsUpdater; used to avoid import cycle.
-type targetPIDsUpdater interface {
-	AddTargetPIDs(pids ...int)
-	RemoveTargetPIDs(pids ...int)
-	TargetPIDs() []app.PID
-}
-
-func TestInstrumenter_ImplementsTargetPIDsUpdater(t *testing.T) {
-	instr, err := New(
+// TestInstrumenter_WithDynamicPIDSelector verifies that when the caller passes a selector via
+// ContextInfo.AppO11y.DynamicPIDSelector, New uses it and the caller can add/remove PIDs on it directly.
+func TestInstrumenter_WithDynamicPIDSelector(t *testing.T) {
+	sel := discover.NewDynamicPIDSelector()
+	ctxInfo := &global.ContextInfo{
+		Prometheus:         &connector.PrometheusManager{},
+		AppO11y:            global.AppO11y{DynamicPIDSelector: sel},
+	}
+	_, err := New(
 		t.Context(),
-		&global.ContextInfo{Prometheus: &connector.PrometheusManager{}},
-		&obi.Config{ChannelBufferLen: 1, Traces: otelcfg.TracesConfig{TracesEndpoint: "http://localhost"}},
-	)
-	require.NoError(t, err)
-	var _ targetPIDsUpdater = instr
-}
-
-func TestInstrumenter_AddTargetPIDs_RemoveTargetPIDs(t *testing.T) {
-	instr, err := New(
-		t.Context(),
-		&global.ContextInfo{Prometheus: &connector.PrometheusManager{}},
+		ctxInfo,
 		&obi.Config{ChannelBufferLen: 1, Traces: otelcfg.TracesConfig{TracesEndpoint: "http://localhost"}},
 	)
 	require.NoError(t, err)
 
-	// AddTargetPIDs and RemoveTargetPIDs should not panic; instrumenter always has pidSelector
-	instr.AddTargetPIDs(1, 2, 3)
-	instr.AddTargetPIDs(2, 4) // 2 duplicate, 4 new
-	instr.RemoveTargetPIDs(2)
-	instr.RemoveTargetPIDs(99) // not present, no-op
-	instr.AddTargetPIDs()      // no-op
-	instr.RemoveTargetPIDs()   // no-op
-
-	assert.Equal(t, []app.PID{1, 3, 4}, instr.TargetPIDs())
-}
-
-func TestInstrumenter_TargetPIDs_ReturnsCopy(t *testing.T) {
-	instr, err := New(
-		t.Context(),
-		&global.ContextInfo{Prometheus: &connector.PrometheusManager{}},
-		&obi.Config{ChannelBufferLen: 1, Traces: otelcfg.TracesConfig{TracesEndpoint: "http://localhost"}},
-	)
-	require.NoError(t, err)
-
-	instr.AddTargetPIDs(7, 8)
-	got := instr.TargetPIDs()
-	require.Equal(t, []app.PID{7, 8}, got)
-
-	got[0] = 999
-	assert.Equal(t, []app.PID{7, 8}, instr.TargetPIDs())
+	sel.AddPIDs(1, 2, 3)
+	sel.AddPIDs(2, 4)
+	sel.RemovePIDs(2)
+	sel.RemovePIDs(99)
+	pids, ok := sel.GetPIDs()
+	require.True(t, ok)
+	assert.Equal(t, []app.PID{1, 3, 4}, pids)
 }

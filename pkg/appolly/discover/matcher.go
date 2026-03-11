@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
 	"os"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/services"
 	ebpfcommon "go.opentelemetry.io/obi/pkg/ebpf/common"
+	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 	"go.opentelemetry.io/obi/pkg/obi"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
@@ -29,21 +31,55 @@ var (
 	osPidFunc            = os.Getpid
 )
 
+// dynamicPIDCriteriaAdapter implements services.Selector by delegating only GetPIDs to the
+// DynamicPIDSelector; all other methods return empty/zero so the matcher treats "PID in dynamic set"
+// as a match. Used when the matcher has a dynamic PID selector so runtime PIDs supplement config criteria.
+type dynamicPIDCriteriaAdapter struct {
+	d *DynamicPIDSelector
+}
+
+func (a *dynamicPIDCriteriaAdapter) GetName() string                                      { return "" }
+func (a *dynamicPIDCriteriaAdapter) GetNamespace() string                                 { return "" }
+func (a *dynamicPIDCriteriaAdapter) GetPath() services.StringMatcher                      { return &emptyMatcher{} }
+func (a *dynamicPIDCriteriaAdapter) GetPathRegexp() services.StringMatcher                  { return &emptyMatcher{} }
+func (a *dynamicPIDCriteriaAdapter) GetOpenPorts() *services.IntEnum                        { return &services.IntEnum{} }
+func (a *dynamicPIDCriteriaAdapter) GetLanguages() services.StringMatcher                  { return &emptyMatcher{} }
+func (a *dynamicPIDCriteriaAdapter) GetPIDs() ([]app.PID, bool)                            { return a.d.GetPIDs() }
+func (a *dynamicPIDCriteriaAdapter) GetCmdArgs() services.StringMatcher                     { return &emptyMatcher{} }
+func (a *dynamicPIDCriteriaAdapter) IsContainersOnly() bool                                { return false }
+func (a *dynamicPIDCriteriaAdapter) RangeMetadata() iter.Seq2[string, services.StringMatcher]    { return emptyMetadataSeq2 }
+func (a *dynamicPIDCriteriaAdapter) RangePodLabels() iter.Seq2[string, services.StringMatcher]    { return emptyMetadataSeq2 }
+func (a *dynamicPIDCriteriaAdapter) RangePodAnnotations() iter.Seq2[string, services.StringMatcher] { return emptyMetadataSeq2 }
+func (a *dynamicPIDCriteriaAdapter) GetExportModes() services.ExportModes                   { return services.ExportModeUnset }
+func (a *dynamicPIDCriteriaAdapter) GetSamplerConfig() *services.SamplerConfig             { return nil }
+func (a *dynamicPIDCriteriaAdapter) GetRoutesConfig() *services.CustomRoutesConfig         { return nil }
+func (a *dynamicPIDCriteriaAdapter) MetricsConfig() perapp.SvcMetricsConfig                 { return perapp.SvcMetricsConfig{} }
+
+type emptyMatcher struct{}
+
+func (emptyMatcher) IsSet() bool               { return false }
+func (emptyMatcher) MatchString(_ string) bool { return false }
+
+func emptyMetadataSeq2(yield func(string, services.StringMatcher) bool) {}
+
 // criteriaMatcherProvider filters the processes that match the discovery criteria.
-// If pidSelectorChangeNotify is non-nil, the matcher listens to removed-PID notifications
-// and runs synthetic deletes only when notified, not on every batch.
+// When dynamicSelector is non-nil, runtime PIDs supplement config criteria and the matcher
+// listens to the selector's RemovedNotify() channel for synthetic deletes.
 func criteriaMatcherProvider(
 	cfg *obi.Config,
 	input *msg.Queue[[]Event[ProcessAttrs]],
 	output *msg.Queue[[]Event[ProcessMatch]],
-	pidSelector services.Selector,
-	pidSelectorChangeNotify <-chan []app.PID,
+	configCriteria []services.Selector,
+	dynamicSelector *DynamicPIDSelector,
 ) swarm.InstanceFunc {
 	instrumenterNamespace, _ := namespaceFetcherFunc(app.PID(osPidFunc()))
-	criteria := FindingCriteria(cfg, pidSelector)
+	var removedNotify <-chan []app.PID
+	if dynamicSelector != nil {
+		removedNotify = dynamicSelector.RemovedNotify()
+	}
 	m := &Matcher{
 		Log:                 slog.With("component", "discover.CriteriaMatcher"),
-		Criteria:            criteria,
+		Criteria:            configCriteria,
 		ExcludeCriteria:     ExcludingCriteria(cfg),
 		LogEnricherCriteria: LogEnricherFindingCriteria(cfg),
 		ProcessHistory:      map[app.PID]ProcessMatch{},
@@ -51,7 +87,8 @@ func criteriaMatcherProvider(
 		Output:              output,
 		Namespace:           instrumenterNamespace,
 		HasHostPidAccess:    hasHostPidAccess(),
-		RemovedPIDsNotify:   pidSelectorChangeNotify,
+		DynamicPIDs:         dynamicSelector,
+		RemovedPIDsNotify:   removedNotify,
 	}
 	return swarm.DirectInstance(m.Run)
 }
@@ -71,6 +108,8 @@ type Matcher struct {
 	Output           *msg.Queue[[]Event[ProcessMatch]]
 	Namespace        string
 	HasHostPidAccess bool
+	// DynamicPIDs, when set, supplements config criteria: a process also matches if its PID is in this set.
+	DynamicPIDs *DynamicPIDSelector
 	// RemovedPIDsNotify, when set, carries the PIDs removed from the dynamic selector so the
 	// matcher can emit targeted synthetic deletes without rescanning ProcessHistory.
 	RemovedPIDsNotify <-chan []app.PID
@@ -174,10 +213,14 @@ func (m *Matcher) alreadyMatched(pid app.PID) bool {
 }
 
 func (m *Matcher) matchCriteria(obj ProcessAttrs, proc *services.ProcessInfo) *ProcessMatch {
-	criteria := make([]services.Selector, 0, len(m.Criteria))
-	for i := range m.Criteria {
-		if m.matchProcess(&obj, proc, m.Criteria[i]) && !m.isExcluded(&obj, proc) {
-			criteria = append(criteria, m.Criteria[i])
+	effectiveCriteria := m.Criteria
+	if m.DynamicPIDs != nil {
+		effectiveCriteria = append([]services.Selector{&dynamicPIDCriteriaAdapter{d: m.DynamicPIDs}}, m.Criteria...)
+	}
+	criteria := make([]services.Selector, 0, len(effectiveCriteria))
+	for i := range effectiveCriteria {
+		if m.matchProcess(&obj, proc, effectiveCriteria[i]) && !m.isExcluded(&obj, proc) {
+			criteria = append(criteria, effectiveCriteria[i])
 		}
 	}
 
@@ -433,31 +476,14 @@ func LogEnricherFindingCriteria(cfg *obi.Config) []services.Selector {
 	return selectors
 }
 
-// FindingCriteria returns discovery criteria from config. When pidSelector is non-nil
-// and has PIDs (e.g. Instrumenter's GlobAttributes with target_pids or runtime AddPIDs),
-// it is the only criterion: config target PIDs are prefilled into it and it is returned alone.
-// When pidSelector is nil or has no PIDs (standalone config with discovery.instrument, no target_pids),
-// config-based criteria (discovery.instrument, etc.) are used so processes are still discovered.
-func FindingCriteria(cfg *obi.Config, pidSelector services.Selector) []services.Selector {
+// FindingCriteria returns discovery criteria from config. When skipTargetPIDs is true
+// (e.g. Instrumenter with DynamicPIDSelector), target_pids are not included here; the matcher
+// uses the dynamic selector as a supplement. When skipTargetPIDs is false, target_pids from
+// config are included as static criteria when set.
+func FindingCriteria(cfg *obi.Config, skipTargetPIDs bool) []services.Selector {
 	logDeprecationAndConflicts(cfg)
 
-	if pidSelector != nil {
-		if cfg.TargetPIDs.Len() > 0 {
-			vals := cfg.TargetPIDs.AllValues()
-			pids := make([]uint32, 0, len(vals))
-			for _, v := range vals {
-				pids = append(pids, uint32(v))
-			}
-			pidSelector.AddPIDs(pids...)
-		}
-		// Use pidSelector as the only criterion only when it has effective PID criteria.
-		// Otherwise (e.g. Instrumenter started with no target_pids) use config-based discovery.
-		if pids, ok := pidSelector.GetPIDs(); ok && len(pids) > 0 {
-			return []services.Selector{pidSelector}
-		}
-	}
-
-	if cfg.TargetPIDs.Len() > 0 {
+	if !skipTargetPIDs && cfg.TargetPIDs.Len() > 0 {
 		vals := cfg.TargetPIDs.AllValues()
 		pids := make([]uint32, 0, len(vals))
 		for _, v := range vals {

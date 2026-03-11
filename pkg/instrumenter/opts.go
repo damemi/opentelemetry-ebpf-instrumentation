@@ -4,8 +4,8 @@
 package instrumenter // import "go.opentelemetry.io/obi/pkg/instrumenter"
 
 import (
-	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
+	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 )
@@ -13,26 +13,12 @@ import (
 // Option that override the instantiation of the instrumenter
 type Option func(info *global.ContextInfo)
 
-// TargetPIDsUpdater is implemented by the default App O11y instrumenter. It allows adding,
-// removing, and inspecting target PIDs at runtime. Works with any config; no initial
-// target_pids required.
-type TargetPIDsUpdater interface {
-	AddTargetPIDs(pids ...int)
-	RemoveTargetPIDs(pids ...int)
-	TargetPIDs() []app.PID
-}
-
-// WithTargetPIDsUpdater calls the given function with a TargetPIDsUpdater after the App O11y
-// instrumenter is created. Callers receive the App O11y instrumenter (as this interface); store it
-// and call AddTargetPIDs/RemoveTargetPIDs at runtime to change which PIDs are instrumented, or
-// TargetPIDs to inspect the currently tracked set.
-func WithTargetPIDsUpdater(onReady func(TargetPIDsUpdater)) Option {
+// WithDynamicPIDSelector passes the given dynamic PID selector into the App O11y pipeline. The caller
+// creates it with discover.NewDynamicPIDSelector(), passes it here, and then calls AddPIDs/RemovePIDs/GetPIDs
+// on it directly—no callback or reference to the instrumenter is needed.
+func WithDynamicPIDSelector(sel *discover.DynamicPIDSelector) Option {
 	return func(info *global.ContextInfo) {
-		info.AppO11y.OnTargetPIDsUpdaterReady = func(v any) {
-			if u, ok := v.(TargetPIDsUpdater); ok {
-				onReady(u)
-			}
-		}
+		info.AppO11y.DynamicPIDSelector = sel
 	}
 }
 

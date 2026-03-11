@@ -12,82 +12,16 @@ import (
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 )
 
-func TestGlobAttributes_AddPIDs_RemovePIDs_GetPIDs(t *testing.T) {
+func TestGlobAttributes_GetPIDs_empty(t *testing.T) {
 	ga := &GlobAttributes{Name: "svc", Namespace: "ns"}
-
-	// Initially empty
 	pids, ok := ga.GetPIDs()
 	assert.False(t, ok)
 	assert.Nil(t, pids)
-
-	// Add PIDs
-	ga.AddPIDs(1, 2, 3)
-	pids, ok = ga.GetPIDs()
-	require.True(t, ok)
-	assert.Equal(t, []app.PID{1, 2, 3}, pids)
-
-	// Add duplicates and new: no duplicates added
-	ga.AddPIDs(2, 3, 4)
-	pids, ok = ga.GetPIDs()
-	require.True(t, ok)
-	assert.Equal(t, []app.PID{1, 2, 3, 4}, pids)
-
-	// Remove PIDs
-	ga.RemovePIDs(2, 4)
-	pids, ok = ga.GetPIDs()
-	require.True(t, ok)
-	assert.Equal(t, []app.PID{1, 3}, pids)
-
-	// Remove all
-	ga.RemovePIDs(1, 3)
-	pids, ok = ga.GetPIDs()
-	assert.False(t, ok)
-	assert.Nil(t, pids)
-
-	// Add after empty
-	ga.AddPIDs(42)
-	pids, ok = ga.GetPIDs()
-	require.True(t, ok)
-	assert.Equal(t, []app.PID{42}, pids)
 }
 
-func TestGlobAttributes_AddPIDs_RemovePIDs_emptyNoOp(t *testing.T) {
-	ga := &GlobAttributes{PIDs: []uint32{1, 2, 3}}
-
-	// No-op when called with no args
-	ga.AddPIDs()
-	ga.RemovePIDs()
-
+func TestGlobAttributes_GetPIDs_static(t *testing.T) {
+	ga := &GlobAttributes{Name: "svc", Namespace: "ns", PIDs: []uint32{1, 2, 3}}
 	pids, ok := ga.GetPIDs()
 	require.True(t, ok)
 	assert.Equal(t, []app.PID{1, 2, 3}, pids)
-}
-
-func TestGlobAttributes_RemovePIDs_NotifyRemovedPIDs(t *testing.T) {
-	ga := &GlobAttributes{PIDs: []uint32{1, 2, 3}}
-	removedPIDs := make(chan []app.PID, 1)
-	ga.SetPIDsChangeNotify(removedPIDs)
-
-	ga.AddPIDs(4)
-	select {
-	case got := <-removedPIDs:
-		t.Fatalf("unexpected add notification: %v", got)
-	default:
-	}
-
-	ga.RemovePIDs(2, 4, 99)
-
-	select {
-	case got := <-removedPIDs:
-		assert.Equal(t, []app.PID{2, 4}, got)
-	default:
-		t.Fatal("expected removed PID notification")
-	}
-
-	ga.RemovePIDs(99)
-	select {
-	case got := <-removedPIDs:
-		t.Fatalf("unexpected remove notification for missing pid: %v", got)
-	default:
-	}
 }

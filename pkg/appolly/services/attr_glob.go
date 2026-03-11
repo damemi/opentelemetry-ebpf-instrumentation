@@ -6,7 +6,6 @@ package services // import "go.opentelemetry.io/obi/pkg/appolly/services"
 import (
 	"fmt"
 	"iter"
-	"sync"
 
 	"github.com/gobwas/glob"
 	"github.com/invopop/jsonschema"
@@ -92,13 +91,8 @@ type GlobAttributes struct {
 	// programming language they are written in. Use lowercase names, e.g. java,go
 	Languages GlobAttr `yaml:"languages"`
 
-	// PIDs allows selecting processes by PID. When non-empty, the process PID must be in this list (in addition to any path/port criteria).
-	// Updated at runtime via AddPIDs/RemovePIDs; pidsMu protects concurrent access.
-	PIDs   []uint32 `yaml:"target_pids"`
-	pidsMu sync.RWMutex
-	// pidsChangeNotify, when set, receives the PIDs actually removed from the selector so the matcher can
-	// uninstrument them without rescanning all tracked PIDs.
-	pidsChangeNotify chan<- []app.PID
+	// PIDs allows selecting processes by PID (static from config). When non-empty, the process PID must be in this list.
+	PIDs []uint32 `yaml:"target_pids"`
 
 	// Path allows defining the regular expression matching the full executable path.
 	Path GlobAttr `yaml:"exe_path"`
@@ -246,8 +240,6 @@ func (ga *GlobAttributes) GetSamplerConfig() *SamplerConfig { return ga.SamplerC
 func (ga *GlobAttributes) GetRoutesConfig() *CustomRoutesConfig { return ga.Routes }
 
 func (ga *GlobAttributes) pids() ([]app.PID, bool) {
-	ga.pidsMu.RLock()
-	defer ga.pidsMu.RUnlock()
 	if len(ga.PIDs) == 0 {
 		return nil, false
 	}
@@ -256,68 +248,6 @@ func (ga *GlobAttributes) pids() ([]app.PID, bool) {
 		out[i] = app.PID(pid)
 	}
 	return out, true
-}
-
-// AddPIDs adds PIDs to the selector's list (for runtime add; thread-safe with GetPIDs).
-func (ga *GlobAttributes) AddPIDs(pids ...uint32) {
-	if len(pids) == 0 {
-		return
-	}
-	ga.pidsMu.Lock()
-	defer ga.pidsMu.Unlock()
-	existing := make(map[uint32]struct{}, len(ga.PIDs))
-	for _, p := range ga.PIDs {
-		existing[p] = struct{}{}
-	}
-	for _, u := range pids {
-		if _, ok := existing[u]; !ok {
-			existing[u] = struct{}{}
-			ga.PIDs = append(ga.PIDs, u)
-		}
-	}
-}
-
-// SetPIDsChangeNotify sets the channel to notify with the PIDs removed from the selector.
-// Used by the discover matcher to emit targeted synthetic deletes when the PID list changes.
-func (ga *GlobAttributes) SetPIDsChangeNotify(ch chan<- []app.PID) {
-	ga.pidsChangeNotify = ch
-}
-
-func (ga *GlobAttributes) notifyPIDsChanged(removedPIDs []app.PID) {
-	if ga.pidsChangeNotify == nil || len(removedPIDs) == 0 {
-		return
-	}
-	// This channel is edge-based: it carries the exact removal that just happened.
-	// That avoids the matcher doing a level-based recompute by scanning all tracked
-	// PIDs against the selector's current state after every change.
-	//
-	// Because the payload is the removal event itself, dropping sends would lose
-	// information. We therefore use a blocking send instead of a best-effort wakeup.
-	ga.pidsChangeNotify <- removedPIDs
-}
-
-// RemovePIDs removes PIDs from the selector's list (for runtime remove; thread-safe with GetPIDs).
-func (ga *GlobAttributes) RemovePIDs(pids ...uint32) {
-	if len(pids) == 0 {
-		return
-	}
-	toRemove := make(map[uint32]struct{})
-	for _, u := range pids {
-		toRemove[u] = struct{}{}
-	}
-	ga.pidsMu.Lock()
-	newPids := ga.PIDs[:0]
-	removedPIDs := make([]app.PID, 0, len(pids))
-	for _, p := range ga.PIDs {
-		if _, remove := toRemove[p]; !remove {
-			newPids = append(newPids, p)
-			continue
-		}
-		removedPIDs = append(removedPIDs, app.PID(p))
-	}
-	ga.PIDs = newPids
-	ga.pidsMu.Unlock()
-	ga.notifyPIDsChanged(removedPIDs)
 }
 
 type nilMatcher struct{}
