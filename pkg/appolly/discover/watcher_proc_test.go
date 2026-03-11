@@ -202,7 +202,7 @@ func TestPortsFetchRequired(t *testing.T) {
 		stateMux:          sync.Mutex{},
 		bpfWatcherEnabled: false,
 		fetchPorts:        true,
-		findingCriteria:   FindingCriteria(cfg, nil),
+		findingCriteria:   FindingCriteria(cfg, false),
 		output:            msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(1)),
 	}
 
@@ -300,7 +300,7 @@ func TestMinProcessAge(t *testing.T) {
 		stateMux:          sync.Mutex{},
 		bpfWatcherEnabled: false,
 		fetchPorts:        true,
-		findingCriteria:   FindingCriteria(cfg, nil),
+		findingCriteria:   FindingCriteria(cfg, false),
 		output:            msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(1)),
 	}
 

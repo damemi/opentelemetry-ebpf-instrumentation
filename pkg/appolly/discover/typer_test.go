@@ -37,8 +37,6 @@ func (d dummyCriterion) IsContainersOnly() bool                                 
 func (d dummyCriterion) GetPathRegexp() services.StringMatcher                          { return nil }
 func (d dummyCriterion) GetCmdArgs() services.StringMatcher                             { return nil }
 func (d dummyCriterion) GetPIDs() ([]app.PID, bool)                                     { return nil, false }
-func (d dummyCriterion) AddPIDs(_ ...uint32)                                            {}
-func (d dummyCriterion) RemovePIDs(_ ...uint32)                                         {}
 func (d dummyCriterion) GetNamespace() string                                           { return d.namespace }
 func (d dummyCriterion) GetExportModes() services.ExportModes                           { return d.export }
 func (d dummyCriterion) GetSamplerConfig() *services.SamplerConfig                      { return d.sampler }

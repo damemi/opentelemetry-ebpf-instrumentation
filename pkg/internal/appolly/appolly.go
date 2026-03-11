@@ -13,11 +13,9 @@ import (
 	"time"
 
 	"go.opentelemetry.io/obi/pkg/appolly"
-	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
 	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/appolly/discover/exec"
-	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/appolly/traces"
 	"go.opentelemetry.io/obi/pkg/ebpf"
 	ebpfcommon "go.opentelemetry.io/obi/pkg/ebpf/common"
@@ -53,10 +51,9 @@ type Instrumenter struct {
 	// global data structures for all eBPF tracers
 	ebpfEventContext *ebpfcommon.EBPFEventContext
 
-	// pidSelector is the PID criteria passed to discovery; this Instrumenter implements TargetPIDsUpdater
-	// (AddTargetPIDs/RemoveTargetPIDs) so callers who use WithTargetPIDsUpdater receive this instance.
-	pidSelector services.Selector // *services.GlobAttributes always set; PIDs from config or empty, updated at runtime via AddPIDs/RemovePIDs
-	finishers   []finisher
+	// dynamicPIDSelector is the runtime PID set; from WithDynamicPIDSelector or created in New. Finder preloads from config.
+	dynamicPIDSelector *discover.DynamicPIDSelector
+	finishers          []finisher
 }
 
 type finisher struct {
@@ -101,28 +98,24 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 		return nil, fmt.Errorf("can't instantiate instrumentation pipeline: %w", err)
 	}
 
-	var initialPIDs []uint32
-	if config.TargetPIDs.Len() > 0 {
-		initial := config.TargetPIDs.AllValues()
-		initialPIDs = make([]uint32, len(initial))
-		for i, p := range initial {
-			initialPIDs[i] = uint32(p)
+	var sel *discover.DynamicPIDSelector
+	if v := ctxInfo.AppO11y.DynamicPIDSelector; v != nil {
+		if s, ok := v.(*discover.DynamicPIDSelector); ok {
+			sel = s
 		}
+		// If v is not a *DynamicPIDSelector, sel stays nil and we use static config target_pids.
 	}
+	// When sel is nil, finder gets nil: config target_pids are used as static criteria (FindingCriteria(cfg, false)).
 	instr := &Instrumenter{
-		config:            config,
-		ctxInfo:           ctxInfo,
-		tracersWg:         &sync.WaitGroup{},
-		tracesInput:       tracesInput,
-		processEventInput: processEventsInput,
-		bp:                bp,
-		peGraphBuilder:    swi,
-		ebpfEventContext:  ebpfcommon.NewEBPFEventContext(),
-		pidSelector: &services.GlobAttributes{
-			Name:      config.ServiceName,
-			Namespace: config.ServiceNamespace,
-			PIDs:      initialPIDs,
-		},
+		config:             config,
+		ctxInfo:            ctxInfo,
+		tracersWg:          &sync.WaitGroup{},
+		tracesInput:        tracesInput,
+		processEventInput:  processEventsInput,
+		bp:                 bp,
+		peGraphBuilder:     swi,
+		ebpfEventContext:   ebpfcommon.NewEBPFEventContext(),
+		dynamicPIDSelector: sel,
 	}
 	return instr, nil
 }
@@ -133,13 +126,8 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 // This is: when the context is cancelled, it has unloaded all the eBPF probes.
 func (i *Instrumenter) FindAndInstrument(ctx context.Context) error {
 	finder := discover.NewProcessFinder(i.config, i.ctxInfo, i.tracesInput, i.ebpfEventContext)
-	pidSelectorChangeNotify := make(chan []app.PID, 1)
 	opts := []discover.ProcessFinderStartOpt{
-		discover.WithPIDSelector(i.pidSelector),
-		discover.WithPIDSelectorChangeNotifier(pidSelectorChangeNotify),
-	}
-	if ga, ok := i.pidSelector.(*services.GlobAttributes); ok {
-		ga.SetPIDsChangeNotify(pidSelectorChangeNotify)
+		discover.WithDynamicPIDSelector(i.dynamicPIDSelector),
 	}
 	processEvents, err := finder.Start(ctx, opts...)
 	if err != nil {
@@ -279,43 +267,4 @@ func refreshK8sInformerCache(ctx context.Context, ctxInfo *global.ContextInfo) e
 
 func (i *Instrumenter) processEventsPipeline(ctx context.Context, graph *swarm.Runner) {
 	graph.Start(ctx, swarm.WithCancelTimeout(i.config.ShutdownTimeout))
-}
-
-// AddTargetPIDs adds PIDs to the set of target PIDs instrumented at runtime.
-// Part of TargetPIDsUpdater; callers receive this Instrumenter via WithTargetPIDsUpdater.
-// Works with any config; the PID selector picks up new PIDs on the next discovery poll.
-func (i *Instrumenter) AddTargetPIDs(pids ...int) {
-	if len(pids) == 0 {
-		return
-	}
-	u32 := make([]uint32, len(pids))
-	for j, p := range pids {
-		u32[j] = uint32(p)
-	}
-	i.pidSelector.AddPIDs(u32...)
-}
-
-// TargetPIDs returns the currently tracked target PIDs as a copy.
-// Part of TargetPIDsUpdater.
-func (i *Instrumenter) TargetPIDs() []app.PID {
-	pids, ok := i.pidSelector.GetPIDs()
-	if !ok || len(pids) == 0 {
-		return nil
-	}
-	out := make([]app.PID, len(pids))
-	copy(out, pids)
-	return out
-}
-
-// RemoveTargetPIDs removes PIDs from the set of target PIDs. The selector (GlobAttributes) notifies
-// the matcher so the attacher uninstruments them immediately. Part of TargetPIDsUpdater.
-func (i *Instrumenter) RemoveTargetPIDs(pids ...int) {
-	if len(pids) == 0 {
-		return
-	}
-	u32 := make([]uint32, len(pids))
-	for j, p := range pids {
-		u32[j] = uint32(p)
-	}
-	i.pidSelector.RemovePIDs(u32...)
 }

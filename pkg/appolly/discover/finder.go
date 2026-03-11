@@ -7,9 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
-	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/ebpf"
 	ebpfcommon "go.opentelemetry.io/obi/pkg/ebpf/common"
 	"go.opentelemetry.io/obi/pkg/export/imetrics"
@@ -43,9 +41,8 @@ func NewProcessFinder(
 }
 
 type processFinderStartConfig struct {
-	enrichedProcessEvents   *msg.Queue[[]Event[ProcessAttrs]]
-	pidSelector             services.Selector
-	pidSelectorChangeNotify <-chan []app.PID
+	enrichedProcessEvents *msg.Queue[[]Event[ProcessAttrs]]
+	dynamicPIDSelector    *DynamicPIDSelector
 }
 
 // ProcessFinderStartOpt allows overriding some internal behavior of ProcessFinder.Start method.
@@ -61,20 +58,12 @@ func WithEnrichedProcessEvents(enrichedProcessEvents *msg.Queue[[]Event[ProcessA
 	}
 }
 
-// WithPIDSelector supplies an additional selector for PID-based discovery. When non-nil, it is prepended
-// to the criteria from config (e.g. Instrumenter passes a GlobAttributes; use AddPIDs/RemovePIDs for runtime updates).
-func WithPIDSelector(selector services.Selector) ProcessFinderStartOpt {
+// WithDynamicPIDSelector supplies the OBI dynamic PID set. Caller can pass discover.NewDynamicPIDSelector()
+// and add PIDs via the selector. When non-nil, the finder wires it to the matcher and removed-PID
+// notifications are used for synthetic deletes.
+func WithDynamicPIDSelector(selector *DynamicPIDSelector) ProcessFinderStartOpt {
 	return func(cfg *processFinderStartConfig) {
-		cfg.pidSelector = selector
-	}
-}
-
-// WithPIDSelectorChangeNotifier provides a channel the matcher listens to; when the caller sends the
-// removed PIDs on it, the matcher emits targeted synthetic deletes so the attacher uninstruments them
-// immediately instead of rescanning all tracked PIDs.
-func WithPIDSelectorChangeNotifier(ch <-chan []app.PID) ProcessFinderStartOpt {
-	return func(cfg *processFinderStartConfig) {
-		cfg.pidSelectorChangeNotify = ch
+		cfg.dynamicPIDSelector = selector
 	}
 }
 
@@ -88,10 +77,12 @@ func (pf *ProcessFinder) Start(ctx context.Context, opts ...ProcessFinderStartOp
 
 	tracerEvents := msgh.QueueFromConfig[Event[*ebpf.Instrumentable]](pf.cfg, "tracerEvents")
 
+	configCriteria := FindingCriteria(pf.cfg, startConfig.dynamicPIDSelector != nil)
+
 	swi := swarm.Instancer{}
 	processEvents := msgh.QueueFromConfig[[]Event[ProcessAttrs]](pf.cfg, "processEvents")
 
-	swi.Add(swarm.DirectInstance(ProcessWatcherFunc(pf.cfg, pf.ebpfEventContext, processEvents, startConfig.pidSelector)),
+	swi.Add(swarm.DirectInstance(ProcessWatcherFunc(pf.cfg, pf.ebpfEventContext, processEvents, configCriteria)),
 		swarm.WithID("ProcessWatcher"))
 
 	kubeEnrichedEvents := msgh.QueueFromConfig[[]Event[ProcessAttrs]](pf.cfg, "kubeEnrichedEvents")
@@ -117,7 +108,7 @@ func (pf *ProcessFinder) Start(ctx context.Context, opts ...ProcessFinderStartOp
 	), swarm.WithID("LanguageDecoratorProvider"))
 
 	criteriaFilteredEvents := msgh.QueueFromConfig[[]Event[ProcessMatch]](pf.cfg, "criteriaFilteredEvents")
-	swi.Add(criteriaMatcherProvider(pf.cfg, langEnrichedEvents, criteriaFilteredEvents, startConfig.pidSelector, startConfig.pidSelectorChangeNotify),
+	swi.Add(criteriaMatcherProvider(pf.cfg, langEnrichedEvents, criteriaFilteredEvents, configCriteria, startConfig.dynamicPIDSelector),
 		swarm.WithID("CriteriaMatcher"))
 
 	executableTypes := msgh.QueueFromConfig[[]Event[ebpf.Instrumentable]](pf.cfg, "executableTypes")

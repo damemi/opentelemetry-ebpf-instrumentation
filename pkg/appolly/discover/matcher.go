@@ -30,20 +30,23 @@ var (
 )
 
 // criteriaMatcherProvider filters the processes that match the discovery criteria.
-// If pidSelectorChangeNotify is non-nil, the matcher listens to removed-PID notifications
-// and runs synthetic deletes only when notified, not on every batch.
+// When dynamicSelector is non-nil, runtime PIDs supplement config criteria and the matcher
+// listens to the selector's RemovedNotify() channel for synthetic deletes.
 func criteriaMatcherProvider(
 	cfg *obi.Config,
 	input *msg.Queue[[]Event[ProcessAttrs]],
 	output *msg.Queue[[]Event[ProcessMatch]],
-	pidSelector services.Selector,
-	pidSelectorChangeNotify <-chan []app.PID,
+	configCriteria []services.Selector,
+	dynamicSelector *DynamicPIDSelector,
 ) swarm.InstanceFunc {
 	instrumenterNamespace, _ := namespaceFetcherFunc(app.PID(osPidFunc()))
-	criteria := FindingCriteria(cfg, pidSelector)
+	var removedNotify <-chan []app.PID
+	if dynamicSelector != nil {
+		removedNotify = dynamicSelector.RemovedNotify()
+	}
 	m := &Matcher{
 		Log:                 slog.With("component", "discover.CriteriaMatcher"),
-		Criteria:            criteria,
+		Criteria:            configCriteria,
 		ExcludeCriteria:     ExcludingCriteria(cfg),
 		LogEnricherCriteria: LogEnricherFindingCriteria(cfg),
 		ProcessHistory:      map[app.PID]ProcessMatch{},
@@ -51,7 +54,8 @@ func criteriaMatcherProvider(
 		Output:              output,
 		Namespace:           instrumenterNamespace,
 		HasHostPidAccess:    hasHostPidAccess(),
-		RemovedPIDsNotify:   pidSelectorChangeNotify,
+		DynamicPIDs:         dynamicSelector,
+		RemovedPIDsNotify:   removedNotify,
 	}
 	return swarm.DirectInstance(m.Run)
 }
@@ -71,6 +75,8 @@ type Matcher struct {
 	Output           *msg.Queue[[]Event[ProcessMatch]]
 	Namespace        string
 	HasHostPidAccess bool
+	// DynamicPIDs, when set, supplements config criteria: a process also matches if its PID is in this set.
+	DynamicPIDs *DynamicPIDSelector
 	// RemovedPIDsNotify, when set, carries the PIDs removed from the dynamic selector so the
 	// matcher can emit targeted synthetic deletes without rescanning ProcessHistory.
 	RemovedPIDsNotify <-chan []app.PID
@@ -174,10 +180,14 @@ func (m *Matcher) alreadyMatched(pid app.PID) bool {
 }
 
 func (m *Matcher) matchCriteria(obj ProcessAttrs, proc *services.ProcessInfo) *ProcessMatch {
-	criteria := make([]services.Selector, 0, len(m.Criteria))
-	for i := range m.Criteria {
-		if m.matchProcess(&obj, proc, m.Criteria[i]) && !m.isExcluded(&obj, proc) {
-			criteria = append(criteria, m.Criteria[i])
+	effectiveCriteria := m.Criteria
+	if m.DynamicPIDs != nil {
+		effectiveCriteria = append([]services.Selector{m.DynamicPIDs.AsSelector()}, m.Criteria...)
+	}
+	criteria := make([]services.Selector, 0, len(effectiveCriteria))
+	for i := range effectiveCriteria {
+		if m.matchProcess(&obj, proc, effectiveCriteria[i]) && !m.isExcluded(&obj, proc) {
+			criteria = append(criteria, effectiveCriteria[i])
 		}
 	}
 
@@ -433,31 +443,14 @@ func LogEnricherFindingCriteria(cfg *obi.Config) []services.Selector {
 	return selectors
 }
 
-// FindingCriteria returns discovery criteria from config. When pidSelector is non-nil
-// and has PIDs (e.g. Instrumenter's GlobAttributes with target_pids or runtime AddPIDs),
-// it is the only criterion: config target PIDs are prefilled into it and it is returned alone.
-// When pidSelector is nil or has no PIDs (standalone config with discovery.instrument, no target_pids),
-// config-based criteria (discovery.instrument, etc.) are used so processes are still discovered.
-func FindingCriteria(cfg *obi.Config, pidSelector services.Selector) []services.Selector {
+// FindingCriteria returns discovery criteria from config. When skipTargetPIDs is true
+// (e.g. Instrumenter with DynamicPIDSelector), target_pids are not included here; the matcher
+// uses the dynamic selector as a supplement. When skipTargetPIDs is false, target_pids from
+// config are included as static criteria when set.
+func FindingCriteria(cfg *obi.Config, skipTargetPIDs bool) []services.Selector {
 	logDeprecationAndConflicts(cfg)
 
-	if pidSelector != nil {
-		if cfg.TargetPIDs.Len() > 0 {
-			vals := cfg.TargetPIDs.AllValues()
-			pids := make([]uint32, 0, len(vals))
-			for _, v := range vals {
-				pids = append(pids, uint32(v))
-			}
-			pidSelector.AddPIDs(pids...)
-		}
-		// Use pidSelector as the only criterion only when it has effective PID criteria.
-		// Otherwise (e.g. Instrumenter started with no target_pids) use config-based discovery.
-		if pids, ok := pidSelector.GetPIDs(); ok && len(pids) > 0 {
-			return []services.Selector{pidSelector}
-		}
-	}
-
-	if cfg.TargetPIDs.Len() > 0 {
+	if !skipTargetPIDs && cfg.TargetPIDs.Len() > 0 {
 		vals := cfg.TargetPIDs.AllValues()
 		pids := make([]uint32, 0, len(vals))
 		for _, v := range vals {
