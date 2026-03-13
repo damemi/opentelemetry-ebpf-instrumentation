@@ -20,7 +20,6 @@ import (
 	"go.opentelemetry.io/obi/pkg/obi"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
-	"go.opentelemetry.io/obi/pkg/pipe/swarm/swarms"
 )
 
 var (
@@ -98,21 +97,6 @@ func (pm ProcessMatch) LogEnricherEnabled() bool {
 func (m *Matcher) Run(ctx context.Context) {
 	defer m.Output.Close()
 	m.Log.Debug("starting criteria matcher node")
-	if m.RemovedPIDsNotify != nil {
-		m.runWithNotify(ctx)
-		return
-	}
-	swarms.ForEachInput(ctx, m.Input, m.Log.Debug, func(i []Event[ProcessAttrs]) {
-		m.Log.Debug("filtering processes", "len", len(i))
-		o := m.filter(i)
-		m.Log.Debug("processes matching selection criteria", "len", len(o))
-		if len(o) > 0 {
-			m.Output.Send(o)
-		}
-	})
-}
-
-func (m *Matcher) runWithNotify(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
