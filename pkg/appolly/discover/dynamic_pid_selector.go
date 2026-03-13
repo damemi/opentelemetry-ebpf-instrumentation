@@ -20,12 +20,14 @@ type DynamicPIDSelector struct {
 	mu        sync.RWMutex
 	pids      []uint32
 	removedCh chan []app.PID // owned by selector; RemovedNotify() returns receive-only view
+	addedCh   chan []app.PID // owned by selector; AddedPIDsNotify() returns receive-only view
 }
 
 // NewDynamicPIDSelector creates a new dynamic PID selector (initially empty).
 func NewDynamicPIDSelector() *DynamicPIDSelector {
 	return &DynamicPIDSelector{
 		removedCh: make(chan []app.PID, 1),
+		addedCh:   make(chan []app.PID, 1),
 	}
 }
 
@@ -33,6 +35,13 @@ func NewDynamicPIDSelector() *DynamicPIDSelector {
 // The matcher uses this to emit synthetic deletes. Safe to call from multiple goroutines.
 func (d *DynamicPIDSelector) RemovedNotify() <-chan []app.PID {
 	return d.removedCh
+}
+
+// AddedPIDsNotify returns the channel on which newly added PIDs are sent when AddPIDs is called.
+// The process watcher uses this to forget those PIDs from its tracked state so they are re-emitted
+// as new on the next poll (supporting adding an already-seen process to the dynamic set).
+func (d *DynamicPIDSelector) AddedPIDsNotify() <-chan []app.PID {
+	return d.addedCh
 }
 
 // GetPIDs returns a copy of the current PID list and true when non-empty.
@@ -49,23 +58,27 @@ func (d *DynamicPIDSelector) GetPIDs() ([]app.PID, bool) {
 	return out, true
 }
 
-// AddPIDs adds PIDs to the set (deduplicated).
+// AddPIDs adds PIDs to the set (deduplicated). Newly added PIDs are sent on AddedPIDsNotify()
+// so the process watcher can forget them and re-emit them as new on the next poll.
 func (d *DynamicPIDSelector) AddPIDs(pids ...uint32) {
 	if len(pids) == 0 {
 		return
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	existing := make(map[uint32]struct{}, len(d.pids))
 	for _, p := range d.pids {
 		existing[p] = struct{}{}
 	}
+	var added []app.PID
 	for _, u := range pids {
 		if _, ok := existing[u]; !ok {
 			existing[u] = struct{}{}
 			d.pids = append(d.pids, u)
+			added = append(added, app.PID(u))
 		}
 	}
+	d.mu.Unlock()
+	d.notifyAdded(added)
 }
 
 // RemovePIDs removes PIDs from the set and sends them on RemovedNotify() for the matcher.
@@ -100,6 +113,17 @@ func (d *DynamicPIDSelector) notifyRemoved(removedPIDs []app.PID) {
 	case d.removedCh <- removedPIDs:
 	default:
 		// no receiver (e.g. matcher not running); drop so RemovePIDs never blocks
+	}
+}
+
+func (d *DynamicPIDSelector) notifyAdded(addedPIDs []app.PID) {
+	if len(addedPIDs) == 0 {
+		return
+	}
+	select {
+	case d.addedCh <- addedPIDs:
+	default:
+		// no receiver (e.g. watcher not running); drop so AddPIDs never blocks
 	}
 }
 

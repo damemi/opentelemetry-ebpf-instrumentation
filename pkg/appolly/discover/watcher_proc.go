@@ -68,7 +68,10 @@ func wplog() *slog.Logger {
 
 // ProcessWatcherFunc polls every PollInterval for new processes and forwards either new or deleted process PIDs
 // as well as PIDs from processes that setup a new connection.
-func ProcessWatcherFunc(cfg *obi.Config, ebpfContext *ebpfcommon.EBPFEventContext, output *msg.Queue[[]Event[ProcessAttrs]], findingCriteria []services.Selector) swarm.RunFunc {
+// When addedPIDsNotify is non-nil, the watcher receives PIDs that were added to the dynamic selector and
+// forgets them from its tracked state so they are re-emitted as new on the next poll (supporting adding
+// an already-seen process).
+func ProcessWatcherFunc(cfg *obi.Config, ebpfContext *ebpfcommon.EBPFEventContext, output *msg.Queue[[]Event[ProcessAttrs]], findingCriteria []services.Selector, addedPIDsNotify <-chan []app.PID) swarm.RunFunc {
 	acc := pollAccounter{
 		cfg:               cfg,
 		output:            output,
@@ -84,6 +87,7 @@ func ProcessWatcherFunc(cfg *obi.Config, ebpfContext *ebpfcommon.EBPFEventContex
 		stateMux:          sync.Mutex{},
 		findingCriteria:   findingCriteria,
 		ebpfContext:       ebpfContext,
+		addedPIDsNotify:   addedPIDsNotify,
 	}
 	if acc.interval == 0 {
 		acc.interval = defaultPollInterval
@@ -121,6 +125,8 @@ type pollAccounter struct {
 	findingCriteria   []services.Selector
 	output            *msg.Queue[[]Event[ProcessAttrs]]
 	ebpfContext       *ebpfcommon.EBPFEventContext
+	// when non-nil, PIDs received here are removed from pids/pidPorts so they are re-emitted as new on next poll
+	addedPIDsNotify <-chan []app.PID
 }
 
 func (pa *pollAccounter) run(ctx context.Context) {
@@ -154,12 +160,42 @@ func (pa *pollAccounter) run(ctx context.Context) {
 				pa.output.Send(events)
 			}
 		}
-		select {
-		case <-ctx.Done():
-			log.Debug("context canceled. Exiting")
-			return
-		case <-time.After(pa.interval):
-			// poll event starting again
+		switch {
+		case pa.addedPIDsNotify != nil:
+			select {
+			case <-ctx.Done():
+				log.Debug("context canceled. Exiting")
+				return
+			case pids := <-pa.addedPIDsNotify:
+				pa.forgetPIDs(pids)
+				log.Debug("forgot PIDs so they can be re-emitted as new", "pids", pids)
+			case <-time.After(pa.interval):
+				// poll again
+			}
+		default:
+			select {
+			case <-ctx.Done():
+				log.Debug("context canceled. Exiting")
+				return
+			case <-time.After(pa.interval):
+				// poll again
+			}
+		}
+	}
+}
+
+// forgetPIDs removes the given PIDs from the watcher's tracked state so they will be
+// reported as new on the next poll (e.g. when added to the dynamic PID selector).
+func (pa *pollAccounter) forgetPIDs(pids []app.PID) {
+	for _, pid := range pids {
+		delete(pa.pids, pid)
+	}
+	for pp := range pa.pidPorts {
+		for _, pid := range pids {
+			if pp.Pid == pid {
+				delete(pa.pidPorts, pp)
+				break
+			}
 		}
 	}
 }

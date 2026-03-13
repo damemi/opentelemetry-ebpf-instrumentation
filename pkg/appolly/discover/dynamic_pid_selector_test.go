@@ -52,3 +52,24 @@ func TestDynamicPIDSelector_RemovePIDs_Notify(t *testing.T) {
 	got = <-ch
 	assert.Equal(t, []app.PID{42}, got)
 }
+
+func TestDynamicPIDSelector_AddPIDs_Notify(t *testing.T) {
+	d := NewDynamicPIDSelector()
+	ch := d.AddedPIDsNotify()
+
+	d.AddPIDs(42, 100)
+	got := <-ch
+	assert.Equal(t, []app.PID{42, 100}, got)
+
+	// Adding already-present PIDs does not notify
+	d.AddPIDs(42)
+	select {
+	case <-ch:
+		t.Fatal("expected no send when adding existing PID")
+	default:
+	}
+	// New PIDs only
+	d.AddPIDs(42, 99)
+	got = <-ch
+	assert.Equal(t, []app.PID{99}, got)
+}
