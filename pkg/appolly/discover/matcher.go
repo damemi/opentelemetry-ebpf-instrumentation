@@ -41,12 +41,14 @@ func criteriaMatcherProvider(
 ) swarm.InstanceFunc {
 	instrumenterNamespace, _ := namespaceFetcherFunc(app.PID(osPidFunc()))
 	var removedNotify <-chan []app.PID
+	criteria := configCriteria
 	if dynamicSelector != nil {
 		removedNotify = dynamicSelector.RemovedNotify()
+		criteria = append([]services.Selector{dynamicSelector.AsSelector()}, configCriteria...)
 	}
 	m := &Matcher{
 		Log:                 slog.With("component", "discover.CriteriaMatcher"),
-		Criteria:            configCriteria,
+		Criteria:            criteria,
 		ExcludeCriteria:     ExcludingCriteria(cfg),
 		LogEnricherCriteria: LogEnricherFindingCriteria(cfg),
 		ProcessHistory:      map[app.PID]ProcessMatch{},
@@ -180,14 +182,10 @@ func (m *Matcher) alreadyMatched(pid app.PID) bool {
 }
 
 func (m *Matcher) matchCriteria(obj ProcessAttrs, proc *services.ProcessInfo) *ProcessMatch {
-	effectiveCriteria := m.Criteria
-	if m.DynamicPIDs != nil {
-		effectiveCriteria = append([]services.Selector{m.DynamicPIDs.AsSelector()}, m.Criteria...)
-	}
-	criteria := make([]services.Selector, 0, len(effectiveCriteria))
-	for i := range effectiveCriteria {
-		if m.matchProcess(&obj, proc, effectiveCriteria[i]) && !m.isExcluded(&obj, proc) {
-			criteria = append(criteria, effectiveCriteria[i])
+	criteria := make([]services.Selector, 0, len(m.Criteria))
+	for i := range m.Criteria {
+		if m.matchProcess(&obj, proc, m.Criteria[i]) && !m.isExcluded(&obj, proc) {
+			criteria = append(criteria, m.Criteria[i])
 		}
 	}
 

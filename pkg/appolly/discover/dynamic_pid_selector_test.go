@@ -73,3 +73,25 @@ func TestDynamicPIDSelector_AddPIDs_Notify(t *testing.T) {
 	got = <-ch
 	assert.Equal(t, []app.PID{99}, got)
 }
+
+// TestDynamicPIDSelector_QueueNoDrop verifies that rapid AddPIDs/RemovePIDs accumulate
+// in a single pending slice and are sent together when the consumer drains (no drops).
+func TestDynamicPIDSelector_QueueNoDrop(t *testing.T) {
+	d := NewDynamicPIDSelector()
+	d.AddPIDs(1, 2, 3, 4)
+	removedCh := d.RemovedNotify()
+	addedCh := d.AddedPIDsNotify()
+
+	// Drain the initial AddPIDs(1,2,3,4)
+	<-addedCh
+
+	d.RemovePIDs(1)
+	d.RemovePIDs(2, 3)
+	gotRemoved := <-removedCh
+	assert.ElementsMatch(t, []app.PID{1, 2, 3}, gotRemoved)
+
+	d.AddPIDs(10, 20)
+	d.AddPIDs(30)
+	gotAdded := <-addedCh
+	assert.ElementsMatch(t, []app.PID{10, 20, 30}, gotAdded)
+}

@@ -16,19 +16,36 @@ import (
 // config target_pids and updated at runtime via AddPIDs/RemovePIDs. Only the discover
 // matcher uses it for matching; the instrumenter (or appolly) holds a reference and
 // calls AddPIDs/RemovePIDs directly.
+//
+// Pending add/remove PIDs are accumulated in slices and drained by goroutines into
+// RemovedNotify() and AddedPIDsNotify(), so callers never block and nothing is dropped.
 type DynamicPIDSelector struct {
-	mu        sync.RWMutex
-	pids      []uint32
-	removedCh chan []app.PID // owned by selector; RemovedNotify() returns receive-only view
-	addedCh   chan []app.PID // owned by selector; AddedPIDsNotify() returns receive-only view
+	mu   sync.RWMutex
+	pids []uint32
+
+	removedCh      chan []app.PID // consumer receives from this
+	removedPending []app.PID      // PIDs to send on next drain
+	removedMu      sync.Mutex
+	removedCond    *sync.Cond
+
+	addedCh      chan []app.PID // consumer receives from this
+	addedPending []app.PID      // PIDs to send on next drain
+	addedMu      sync.Mutex
+	addedCond    *sync.Cond
 }
 
 // NewDynamicPIDSelector creates a new dynamic PID selector (initially empty).
+// It starts goroutines that drain pending add/remove PIDs to the notify channels.
 func NewDynamicPIDSelector() *DynamicPIDSelector {
-	return &DynamicPIDSelector{
+	d := &DynamicPIDSelector{
 		removedCh: make(chan []app.PID, 1),
 		addedCh:   make(chan []app.PID, 1),
 	}
+	d.removedCond = sync.NewCond(&d.removedMu)
+	d.addedCond = sync.NewCond(&d.addedMu)
+	go d.drainRemoved()
+	go d.drainAdded()
+	return d
 }
 
 // RemovedNotify returns the channel on which removed PIDs are sent when RemovePIDs is called.
@@ -109,21 +126,47 @@ func (d *DynamicPIDSelector) notifyRemoved(removedPIDs []app.PID) {
 	if len(removedPIDs) == 0 {
 		return
 	}
-	select {
-	case d.removedCh <- removedPIDs:
-	default:
-		// no receiver (e.g. matcher not running); drop so RemovePIDs never blocks
-	}
+	d.removedMu.Lock()
+	d.removedPending = append(d.removedPending, removedPIDs...)
+	d.removedCond.Signal()
+	d.removedMu.Unlock()
 }
 
 func (d *DynamicPIDSelector) notifyAdded(addedPIDs []app.PID) {
 	if len(addedPIDs) == 0 {
 		return
 	}
-	select {
-	case d.addedCh <- addedPIDs:
-	default:
-		// no receiver (e.g. watcher not running); drop so AddPIDs never blocks
+	d.addedMu.Lock()
+	d.addedPending = append(d.addedPending, addedPIDs...)
+	d.addedCond.Signal()
+	d.addedMu.Unlock()
+}
+
+// drainRemoved runs in a goroutine; it sends the current pending removed PIDs and clears the slice.
+func (d *DynamicPIDSelector) drainRemoved() {
+	for {
+		d.removedMu.Lock()
+		for len(d.removedPending) == 0 {
+			d.removedCond.Wait()
+		}
+		batch := append([]app.PID(nil), d.removedPending...)
+		d.removedPending = d.removedPending[:0]
+		d.removedMu.Unlock()
+		d.removedCh <- batch
+	}
+}
+
+// drainAdded runs in a goroutine; it sends the current pending added PIDs and clears the slice.
+func (d *DynamicPIDSelector) drainAdded() {
+	for {
+		d.addedMu.Lock()
+		for len(d.addedPending) == 0 {
+			d.addedCond.Wait()
+		}
+		batch := append([]app.PID(nil), d.addedPending...)
+		d.addedPending = d.addedPending[:0]
+		d.addedMu.Unlock()
+		d.addedCh <- batch
 	}
 }
 
