@@ -127,6 +127,8 @@ type pollAccounter struct {
 	ebpfContext       *ebpfcommon.EBPFEventContext
 	// when non-nil, PIDs received here are removed from pids/pidPorts so they are re-emitted as new on next poll
 	addedPIDsNotify <-chan []app.PID
+	// pidsMu protects pids and pidPorts so the addedPIDsNotify goroutine can call forgetPIDs while snapshot runs
+	pidsMu sync.Mutex
 }
 
 func (pa *pollAccounter) run(ctx context.Context) {
@@ -150,6 +152,10 @@ func (pa *pollAccounter) run(ctx context.Context) {
 
 	go pa.watchForProcessEvents(ctx, log, bpfWatchEvents)
 
+	if pa.addedPIDsNotify != nil {
+		go pa.runAddedPIDsNotify(ctx, log)
+	}
+
 	for {
 		procs, err := pa.listProcesses(pa.portFetchRequired())
 		if err != nil {
@@ -160,26 +166,29 @@ func (pa *pollAccounter) run(ctx context.Context) {
 				pa.output.Send(events)
 			}
 		}
-		switch {
-		case pa.addedPIDsNotify != nil:
-			select {
-			case <-ctx.Done():
-				log.Debug("context canceled. Exiting")
+		select {
+		case <-ctx.Done():
+			log.Debug("context canceled. Exiting")
+			return
+		case <-time.After(pa.interval):
+			// poll again
+		}
+	}
+}
+
+// runAddedPIDsNotify runs in a goroutine; it receives PIDs added to the dynamic selector
+// and calls forgetPIDs so they are re-emitted as new on the next poll.
+func (pa *pollAccounter) runAddedPIDsNotify(ctx context.Context, log *slog.Logger) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case pids, ok := <-pa.addedPIDsNotify:
+			if !ok {
 				return
-			case pids := <-pa.addedPIDsNotify:
-				pa.forgetPIDs(pids)
-				log.Debug("forgot PIDs so they can be re-emitted as new", "pids", pids)
-			case <-time.After(pa.interval):
-				// poll again
 			}
-		default:
-			select {
-			case <-ctx.Done():
-				log.Debug("context canceled. Exiting")
-				return
-			case <-time.After(pa.interval):
-				// poll again
-			}
+			pa.forgetPIDs(pids)
+			log.Debug("forgot PIDs so they can be re-emitted as new", "pids", pids)
 		}
 	}
 }
@@ -187,6 +196,8 @@ func (pa *pollAccounter) run(ctx context.Context) {
 // forgetPIDs removes the given PIDs from the watcher's tracked state so they will be
 // reported as new on the next poll (e.g. when added to the dynamic PID selector).
 func (pa *pollAccounter) forgetPIDs(pids []app.PID) {
+	pa.pidsMu.Lock()
+	defer pa.pidsMu.Unlock()
 	for _, pid := range pids {
 		delete(pa.pids, pid)
 	}
@@ -264,6 +275,8 @@ func (pa *pollAccounter) processTooNew(proc ProcessAttrs) bool {
 // snapshot compares the current processes with the status of the previous poll
 // and forwards a list of process creation/deletion events
 func (pa *pollAccounter) snapshot(fetchedProcs map[app.PID]ProcessAttrs) []Event[ProcessAttrs] {
+	pa.pidsMu.Lock()
+	defer pa.pidsMu.Unlock()
 	log := wplog()
 	var events []Event[ProcessAttrs]
 	currentPidPorts := make(map[pidPort]ProcessAttrs, len(fetchedProcs))
