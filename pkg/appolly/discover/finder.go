@@ -79,6 +79,14 @@ func (pf *ProcessFinder) Start(ctx context.Context, opts ...ProcessFinderStartOp
 	tracerEvents := msgh.QueueFromConfig[Event[*ebpf.Instrumentable]](pf.cfg, "tracerEvents")
 
 	configCriteria := FindingCriteria(pf.cfg, startConfig.dynamicPIDSelector != nil)
+	// When using the dynamic PID selector, use only it: pass nil so the matcher gets
+	// just [dynamicSelector.AsSelector()]. Otherwise the matcher would also have config
+	// criteria (e.g. the default RegexSelector with empty path/port), and a process
+	// matches if it matches any criterion—so every process with pod metadata would
+	// match the empty criterion and get instrumented alongside the dynamic PIDs.
+	if startConfig.dynamicPIDSelector != nil {
+		configCriteria = nil
+	}
 
 	swi := swarm.Instancer{}
 	processEvents := msgh.QueueFromConfig[[]Event[ProcessAttrs]](pf.cfg, "processEvents")

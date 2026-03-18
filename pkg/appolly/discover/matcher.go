@@ -29,8 +29,8 @@ var (
 )
 
 // criteriaMatcherProvider filters the processes that match the discovery criteria.
-// When dynamicSelector is non-nil, runtime PIDs supplement config criteria and the matcher
-// listens to the selector's RemovedNotify() channel for synthetic deletes.
+// When dynamicSelector is non-nil, only the dynamic selector is used (no config criteria),
+// and the matcher listens to the selector's RemovedNotify() channel for synthetic deletes.
 func criteriaMatcherProvider(
 	cfg *obi.Config,
 	input *msg.Queue[[]Event[ProcessAttrs]],
@@ -40,10 +40,12 @@ func criteriaMatcherProvider(
 ) swarm.InstanceFunc {
 	instrumenterNamespace, _ := namespaceFetcherFunc(app.PID(osPidFunc()))
 	var removedNotify <-chan []app.PID
-	criteria := configCriteria
+	var criteria []services.Selector
 	if dynamicSelector != nil {
 		removedNotify = dynamicSelector.RemovedNotify()
-		criteria = append([]services.Selector{dynamicSelector.AsSelector()}, configCriteria...)
+		criteria = []services.Selector{dynamicSelector.AsSelector()}
+	} else {
+		criteria = configCriteria
 	}
 	m := &Matcher{
 		Log:                 slog.With("component", "discover.CriteriaMatcher"),
@@ -267,6 +269,13 @@ func (m *Matcher) matchProcess(obj *ProcessAttrs, p *services.ProcessInfo, a ser
 	log := m.Log.With("pid", p.Pid, "exe", p.ExePath)
 	if pids, ok := a.GetPIDs(); ok && len(pids) > 0 {
 		return pidInList(p.Pid, pids)
+	}
+	// When DynamicPIDs is set, Criteria is only the dynamic selector (see criteriaMatcherProvider).
+	// We already handled non-empty GetPIDs() above; here (empty set or PID not in list) must be no match,
+	// or we would fall through and matchByAttributes would match every process with pod metadata.
+	if m.DynamicPIDs != nil {
+		m.Log.Debug("dynamic PID selector: process not in set (or set empty), not matching", "pid", p.Pid, "exe", p.ExePath)
+		return false
 	}
 	if !a.GetPath().IsSet() && !a.GetLanguages().IsSet() && !a.GetCmdArgs().IsSet() && a.GetOpenPorts().Len() == 0 && len(obj.metadata) == 0 {
 		pids, hasPIDs := a.GetPIDs()
