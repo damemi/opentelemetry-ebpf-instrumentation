@@ -100,7 +100,9 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 
 	var sel *discover.DynamicPIDSelector
 	if v := ctxInfo.AppO11y.DynamicPIDSelector; v != nil {
+		fmt.Printf("OBI DYNAMICPID: APPOLLY != NIL\n\n\n\n")
 		if s, ok := v.(*discover.DynamicPIDSelector); ok {
+			fmt.Printf("OBI DYNAMICPID: DISCOVER DYNAMICPIDSELECTOR\n\n\n\n")
 			sel = s
 		}
 		// If v is not a *DynamicPIDSelector, sel stays nil and we use static config target_pids.
