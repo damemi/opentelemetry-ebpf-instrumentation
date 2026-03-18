@@ -29,8 +29,8 @@ var (
 )
 
 // criteriaMatcherProvider filters the processes that match the discovery criteria.
-// When dynamicSelector is non-nil, runtime PIDs supplement config criteria and the matcher
-// listens to the selector's RemovedNotify() channel for synthetic deletes.
+// When dynamicSelector is non-nil, only the dynamic selector is used (no config criteria),
+// and the matcher listens to the selector's RemovedNotify() channel for synthetic deletes.
 func criteriaMatcherProvider(
 	cfg *obi.Config,
 	input *msg.Queue[[]Event[ProcessAttrs]],
@@ -40,10 +40,12 @@ func criteriaMatcherProvider(
 ) swarm.InstanceFunc {
 	instrumenterNamespace, _ := namespaceFetcherFunc(app.PID(osPidFunc()))
 	var removedNotify <-chan []app.PID
-	criteria := configCriteria
+	var criteria []services.Selector
 	if dynamicSelector != nil {
 		removedNotify = dynamicSelector.RemovedNotify()
-		criteria = append([]services.Selector{dynamicSelector.AsSelector()}, configCriteria...)
+		criteria = []services.Selector{dynamicSelector.AsSelector()}
+	} else {
+		criteria = configCriteria
 	}
 	m := &Matcher{
 		Log:                 slog.With("component", "discover.CriteriaMatcher"),
