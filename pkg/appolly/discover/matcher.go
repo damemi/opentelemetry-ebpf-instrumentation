@@ -270,6 +270,13 @@ func (m *Matcher) matchProcess(obj *ProcessAttrs, p *services.ProcessInfo, a ser
 	if pids, ok := a.GetPIDs(); ok && len(pids) > 0 {
 		return pidInList(p.Pid, pids)
 	}
+	// When using only the dynamic PID selector, that selector has no path/port/metadata; we already
+	// handled non-empty GetPIDs() above, so here (empty set) must be no match. Otherwise we fall
+	// through and matchByAttributes would match every process with pod metadata.
+	if m.DynamicPIDs != nil && !a.GetPath().IsSet() && !a.GetPathRegexp().IsSet() && !a.GetLanguages().IsSet() && !a.GetCmdArgs().IsSet() && a.GetOpenPorts().Len() == 0 {
+		m.Log.Debug("dynamic PID selector: process not in set (or set empty), not matching", "pid", p.Pid, "exe", p.ExePath)
+		return false
+	}
 	if !a.GetPath().IsSet() && !a.GetLanguages().IsSet() && !a.GetCmdArgs().IsSet() && a.GetOpenPorts().Len() == 0 && len(obj.metadata) == 0 {
 		pids, hasPIDs := a.GetPIDs()
 		if !hasPIDs || len(pids) == 0 {
