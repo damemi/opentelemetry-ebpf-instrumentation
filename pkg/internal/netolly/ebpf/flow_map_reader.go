@@ -6,8 +6,12 @@ import (
 	"log/slog"
 )
 
-// flowMapDrainer reads, aggregates and removes all the flows in the eBPF flows map
-type flowMapDrainer[IT mapIterator] struct {
+// flowMapLegacyReader reads, aggregates and removes all the flows in the eBPF flows map.
+// This is a legacy implementation for RHEL8 and derivative distributions, which ship a
+// custom 4.18 kernel that backports many eBPF features but don't ship BPF batch maps.
+// https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/8.10_release_notes/available_bpf_features
+// This implementation can be removed when we stop supporting RHEL8 and derived..
+type flowMapLegacyReader[IT mapIterator] struct {
 	log          *slog.Logger
 	flowMap      ebpfMap[IT]
 	cacheMaxSize int
@@ -30,15 +34,11 @@ type mapIterator interface {
 // This way we avoid missing packets that could be updated on the
 // ebpf side while we process/aggregate them here
 // Changing this method invocation by BatchLookupAndDelete could improve performance
-// TODO: detect whether BatchLookupAndDelete is supported (Kernel>=5.6) and use it selectively
-// Supported Lookup/Delete operations by kernel: https://github.com/iovisor/bcc/blob/master/docs/kernel-versions.md
-// Race conditions here causes that some flows are lost in high-load scenarios
-func (fmd *flowMapDrainer[IT]) lookupAndDeleteMap() map[NetFlowId]*NetFlowMetrics {
+// Race conditions here causes that some flows might be lost in high-load scenarios
+func (fmd *flowMapLegacyReader[IT]) lookupAndDeleteMap() (map[NetFlowId]*NetFlowMetrics, error) {
 	flows := make(map[NetFlowId]*NetFlowMetrics, fmd.cacheMaxSize)
 	oldestFlow := uint64(0)
 
-	// Changing Iterate+Delete by LookupAndDelete would prevent some possible race conditions
-	// TODO: detect whether LookupAndDelete is supported (Kernel>=4.20) and use it selectively
 	id := NetFlowId{}
 	var metrics []NetFlowMetrics
 	for iterator := fmd.flowMap.Iterate(); iterator.Next(&id, &metrics); {
@@ -65,7 +65,6 @@ func (fmd *flowMapDrainer[IT]) lookupAndDeleteMap() map[NetFlowId]*NetFlowMetric
 
 		// We observed that eBFP PerCPU map might insert multiple times the same key in the map
 		// (probably due to race conditions) so we need to re-join metrics again at userspace
-		// TODO: instrument how many times the keys are is repeated in the same eviction
 		if stored, ok := flows[id]; ok {
 			stored.Accumulate(perCPUAggregated)
 		} else {
@@ -76,5 +75,5 @@ func (fmd *flowMapDrainer[IT]) lookupAndDeleteMap() map[NetFlowId]*NetFlowMetric
 	if oldestFlow != 0 {
 		fmd.lastReadNS = oldestFlow
 	}
-	return flows
+	return flows, nil
 }
