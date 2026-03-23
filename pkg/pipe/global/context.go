@@ -68,4 +68,7 @@ type AppO11y struct {
 	// (e.g. discover.NewDynamicPIDSelector()), passes it via instrumenter.WithDynamicPIDSelector, and
 	// calls AddPIDs/RemovePIDs/GetPIDs on it directly. The instrumenter does not implement an updater interface.
 	DynamicPIDSelector any
+	// PinIncomingTraceMap, when true, pins the shared incoming_trace_map under the Otel BPFFS directory
+	// (see instrumenter.WithPinIncomingTraceMap) so other eBPF loaders can attach via the same path.
+	PinIncomingTraceMap bool
 }

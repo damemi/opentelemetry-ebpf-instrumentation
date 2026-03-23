@@ -106,6 +106,8 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 		// If v is not a *DynamicPIDSelector, sel stays nil and we use static config target_pids.
 	}
 	// When sel is nil, finder gets nil: config target_pids are used as static criteria (FindingCriteria(cfg, false)).
+	evCtx := ebpfcommon.NewEBPFEventContext()
+	evCtx.PinIncomingTraceMap = ctxInfo.AppO11y.PinIncomingTraceMap
 	instr := &Instrumenter{
 		config:             config,
 		ctxInfo:            ctxInfo,
@@ -114,7 +116,7 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 		processEventInput:  processEventsInput,
 		bp:                 bp,
 		peGraphBuilder:     swi,
-		ebpfEventContext:   ebpfcommon.NewEBPFEventContext(),
+		ebpfEventContext:   evCtx,
 		dynamicPIDSelector: sel,
 	}
 	return instr, nil

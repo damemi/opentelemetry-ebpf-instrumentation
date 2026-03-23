@@ -22,6 +22,16 @@ func WithDynamicPIDSelector(sel *discover.DynamicPIDSelector) Option {
 	}
 }
 
+// WithPinIncomingTraceMap pins OBI's shared incoming_trace_map under the configured Otel BPFFS path
+// (typically <BPFFSPath>/otel/obi/incoming_trace_map) when the map is first created. Other agents in
+// the same process (e.g. Go auto-instrumentation) can open it with ebpf.LoadPinnedMap on that path.
+// Requires a working BPFFS mount; failures are logged at debug and do not fail instrumenter startup.
+func WithPinIncomingTraceMap() Option {
+	return func(info *global.ContextInfo) {
+		info.AppO11y.PinIncomingTraceMap = true
+	}
+}
+
 // OverrideAppExportQueue allows to override the queue used to export the spans.
 // This is useful to run the instrumenter in vendored mode, and you want to provide your
 // own spans exporter.

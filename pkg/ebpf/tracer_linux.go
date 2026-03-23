@@ -34,6 +34,10 @@ import (
 
 const PinInternal = ebpf.PinType(100)
 
+// IncomingTraceMapPinRelative is appended to the Otel BPFFS directory (see ProcessTracer.makeOtelBPFFSPath,
+// normally filepath.Join(cfg.EBPF.BPFFSPath, "otel")) to form the pin path for incoming_trace_map.
+const IncomingTraceMapPinRelative = "obi/incoming_trace_map"
+
 func ptlog() *slog.Logger { return slog.With("component", "ebpf.ProcessTracer") }
 
 type instrumenter struct {
@@ -65,7 +69,7 @@ func alignMaxEntriesIfRingBuf(m *ebpf.MapSpec) {
 }
 
 // sets up internal maps and ensures sane max entries values
-func resolveMaps(eventContext *common.EBPFEventContext, spec *ebpf.CollectionSpec) (*ebpf.CollectionOptions, error) {
+func resolveMaps(eventContext *common.EBPFEventContext, spec *ebpf.CollectionSpec, otelBPFFSPath string) (*ebpf.CollectionOptions, error) {
 	collOpts := ebpf.CollectionOptions{MapReplacements: map[string]*ebpf.Map{}}
 
 	eventContext.MapsLock.Lock()
@@ -82,6 +86,7 @@ func resolveMaps(eventContext *common.EBPFEventContext, spec *ebpf.CollectionSpe
 		internalMap := eventContext.EBPFMaps[k]
 
 		var err error
+		created := false
 
 		if internalMap == nil {
 			internalMap, err = ebpf.NewMap(v)
@@ -91,6 +96,16 @@ func resolveMaps(eventContext *common.EBPFEventContext, spec *ebpf.CollectionSpe
 
 			eventContext.EBPFMaps[k] = internalMap
 			runtime.SetFinalizer(internalMap, (*ebpf.Map).Close)
+			created = true
+		}
+
+		if created && k == "incoming_trace_map" && eventContext.PinIncomingTraceMap && otelBPFFSPath != "" {
+			pinPath := path.Join(otelBPFFSPath, IncomingTraceMapPinRelative)
+			if mkErr := os.MkdirAll(path.Dir(pinPath), 0o755); mkErr != nil {
+				ptlog().Debug("failed to mkdir for incoming_trace_map pin", "path", path.Dir(pinPath), "error", mkErr)
+			} else if pinErr := internalMap.Pin(pinPath); pinErr != nil {
+				ptlog().Debug("failed to pin incoming_trace_map", "path", pinPath, "error", pinErr)
+			}
 		}
 
 		collOpts.MapReplacements[k] = internalMap
@@ -104,7 +119,7 @@ func loadSpec(eventContext *common.EBPFEventContext, bundle *common.SpecBundle, 
 		return fmt.Errorf("rewriting BPF constants for spec %d: %w", idx, err)
 	}
 
-	collOpts, err := resolveMaps(eventContext, bundle.Spec)
+	collOpts, err := resolveMaps(eventContext, bundle.Spec, otelBPFFSPath)
 	if err != nil {
 		return fmt.Errorf("resolving maps for spec %d: %w", idx, err)
 	}

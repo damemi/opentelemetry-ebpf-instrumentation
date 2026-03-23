@@ -70,3 +70,17 @@ func TestInstrumenter_WithDynamicPIDSelector(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []app.PID{1, 3, 4}, pids)
 }
+
+func TestInstrumenter_PinIncomingTraceMapOnEBPFEventContext(t *testing.T) {
+	ctxInfo := &global.ContextInfo{
+		Prometheus: &connector.PrometheusManager{},
+		AppO11y:    global.AppO11y{PinIncomingTraceMap: true},
+	}
+	instr, err := New(
+		t.Context(),
+		ctxInfo,
+		&obi.Config{ChannelBufferLen: 1, Traces: otelcfg.TracesConfig{TracesEndpoint: "http://localhost"}},
+	)
+	require.NoError(t, err)
+	assert.True(t, instr.ebpfEventContext.PinIncomingTraceMap)
+}

@@ -199,6 +199,8 @@ type EBPFEventContext struct {
 	RingBufLock      sync.Mutex
 	MapsLock         sync.Mutex
 	LoadLock         sync.Mutex
+	// PinIncomingTraceMap requests pinning incoming_trace_map when first created (see instrumenter.WithPinIncomingTraceMap).
+	PinIncomingTraceMap bool
 }
 
 var MisclassifiedEvents = make(chan MisclassifiedEvent)

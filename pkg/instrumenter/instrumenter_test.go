@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
 	"go.opentelemetry.io/obi/pkg/obi"
+	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/transform"
 )
 
@@ -79,4 +80,27 @@ func TestRun_WithDynamicPIDSelector(t *testing.T) {
 	assert.Equal(t, []app.PID{100, 200}, pids)
 	cancel()
 	<-done
+}
+
+func TestWithPinIncomingTraceMap_SetsContextInfo(t *testing.T) {
+	ctx := context.Background()
+	cfg := &obi.Config{
+		ChannelBufferLen: 1,
+		Traces:           otelcfg.TracesConfig{TracesEndpoint: "http://localhost:0"},
+	}
+	info, err := BuildCommonContextInfo(ctx, cfg)
+	require.NoError(t, err)
+	require.False(t, info.AppO11y.PinIncomingTraceMap)
+
+	WithPinIncomingTraceMap()(info)
+	assert.True(t, info.AppO11y.PinIncomingTraceMap)
+}
+
+func TestOptions_PinIncomingTraceMapComposesWithDynamicPID(t *testing.T) {
+	info := &global.ContextInfo{}
+	sel := discover.NewDynamicPIDSelector()
+	WithDynamicPIDSelector(sel)(info)
+	WithPinIncomingTraceMap()(info)
+	assert.True(t, info.AppO11y.PinIncomingTraceMap)
+	assert.Equal(t, sel, info.AppO11y.DynamicPIDSelector)
 }
