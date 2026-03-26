@@ -29,7 +29,7 @@ func pidMultisetEqual(a, b []app.PID) bool {
 
 // readPIDNotifyBatchesUntil reads from ch until the concatenation of batches matches want
 // as a multiset (order of batches and within batches does not matter).
-func readPIDNotifyBatchesUntil(t *testing.T, ch <-chan []app.PID, want []app.PID) []app.PID {
+func readPIDNotifyBatchesUntil(t *testing.T, ch <-chan []app.PID, want []app.PID) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	var got []app.PID
@@ -44,7 +44,6 @@ func readPIDNotifyBatchesUntil(t *testing.T, ch <-chan []app.PID, want []app.PID
 			t.Fatalf("timeout reading notify batches: got %v want %v", got, want)
 		}
 	}
-	return got
 }
 
 func TestDynamicPIDSelector_AddPIDs_RemovePIDs_GetPIDs(t *testing.T) {
