@@ -65,13 +65,13 @@ func (m *DynamicMatcher) Run(ctx context.Context) {
 			o := m.filter(i)
 			m.Log.Debug("processes matching selection criteria", "len", len(o))
 			if len(o) > 0 {
-				m.Output.Send(o)
+				m.Output.SendCtx(ctx, o)
 			}
 		case removedPIDs := <-m.RemovedPIDsNotify:
 			o := m.syntheticDeletesForRemovedPIDs(removedPIDs)
 			if len(o) > 0 {
 				m.Log.Debug("synthetic deletes for removed PIDs", "len", len(o))
-				m.Output.Send(o)
+				m.Output.SendCtx(ctx, o)
 			}
 		}
 	}

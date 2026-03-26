@@ -52,6 +52,7 @@ func TestMatchersMutuallyExclusive(t *testing.T) {
 		runner, err := swi.Instance(t.Context())
 		require.NoError(t, err)
 		runner.Start(t.Context())
+		time.Sleep(50 * time.Millisecond)
 		defer outQ.Close()
 
 		// Matches static port-only (80) but not dynamic PID set — would appear if CriteriaMatcher ran.
@@ -82,6 +83,7 @@ func TestMatchersMutuallyExclusive(t *testing.T) {
 		runner, err := swi.Instance(t.Context())
 		require.NoError(t, err)
 		runner.Start(t.Context())
+		time.Sleep(50 * time.Millisecond)
 		defer outQ.Close()
 
 		inQ.Send([]Event[ProcessAttrs]{{Type: EventCreated, Obj: ProcessAttrs{pid: 12, openPorts: []uint32{80}}}})
@@ -662,10 +664,8 @@ func TestCriteriaMatcher_TargetPIDs(t *testing.T) {
 }
 
 func TestCriteriaMatcher_DynamicTargetPIDs(t *testing.T) {
-	pipeConfig := obi.Config{ServiceName: "dyn-svc", ServiceNamespace: "ns"}
 	dynamicSelector := NewDynamicPIDSelector()
 	dynamicSelector.AddPIDs(42)
-	configCriteria := FindingCriteria(&pipeConfig)
 
 	discoveredProcesses := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
 	filteredProcessesQu := msg.NewQueue[[]Event[ProcessMatch]](msg.ChannelBufferLen(10))
@@ -673,9 +673,10 @@ func TestCriteriaMatcher_DynamicTargetPIDs(t *testing.T) {
 	processInfo = func(pp ProcessAttrs) (*services.ProcessInfo, error) {
 		return &services.ProcessInfo{Pid: pp.pid, ExePath: "/any/exe", OpenPorts: pp.openPorts}, nil
 	}
-	matcherFunc, err := criteriaMatcherProvider(&pipeConfig, discoveredProcesses, filteredProcessesQu, configCriteria, dynamicSelector)(t.Context())
+	runFn, err := dynamicMatcherProvider(discoveredProcesses, filteredProcessesQu, dynamicSelector)(t.Context())
 	require.NoError(t, err)
-	go matcherFunc(t.Context())
+	go runFn(t.Context())
+	time.Sleep(50 * time.Millisecond)
 	defer filteredProcessesQu.Close()
 
 	discoveredProcesses.Send([]Event[ProcessAttrs]{
@@ -712,10 +713,8 @@ func TestCriteriaMatcher_DynamicTargetPIDs(t *testing.T) {
 }
 
 func TestCriteriaMatcher_DynamicTargetPIDs_RemoveNotification(t *testing.T) {
-	pipeConfig := obi.Config{ServiceName: "dyn-svc", ServiceNamespace: "ns"}
 	dynamicSelector := NewDynamicPIDSelector()
 	dynamicSelector.AddPIDs(42, 100)
-	configCriteria := FindingCriteria(&pipeConfig)
 
 	discoveredProcesses := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
 	filteredProcessesQu := msg.NewQueue[[]Event[ProcessMatch]](msg.ChannelBufferLen(10))
@@ -723,9 +722,10 @@ func TestCriteriaMatcher_DynamicTargetPIDs_RemoveNotification(t *testing.T) {
 	processInfo = func(pp ProcessAttrs) (*services.ProcessInfo, error) {
 		return &services.ProcessInfo{Pid: pp.pid, ExePath: "/any/exe", OpenPorts: pp.openPorts}, nil
 	}
-	matcherFunc, err := criteriaMatcherProvider(&pipeConfig, discoveredProcesses, filteredProcessesQu, configCriteria, dynamicSelector)(t.Context())
+	runFn, err := dynamicMatcherProvider(discoveredProcesses, filteredProcessesQu, dynamicSelector)(t.Context())
 	require.NoError(t, err)
-	go matcherFunc(t.Context())
+	go runFn(t.Context())
+	time.Sleep(50 * time.Millisecond)
 	defer filteredProcessesQu.Close()
 
 	discoveredProcesses.Send([]Event[ProcessAttrs]{
