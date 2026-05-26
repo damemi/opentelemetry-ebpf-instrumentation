@@ -98,13 +98,7 @@ func New(ctx context.Context, ctxInfo *global.ContextInfo, config *obi.Config) (
 		return nil, fmt.Errorf("can't instantiate instrumentation pipeline: %w", err)
 	}
 
-	var sel *discover.DynamicPIDSelector
-	if v := ctxInfo.AppO11y.DynamicPIDSelector; v != nil {
-		if s, ok := v.(*discover.DynamicPIDSelector); ok {
-			sel = s
-		}
-		// If v is not a *DynamicPIDSelector, sel stays nil and we use static config target_pids.
-	}
+	sel, _ := ctxInfo.DynamicPIDSelector.(*discover.DynamicPIDSelector)
 	// When sel is nil, finder gets nil: config target_pids are used as static criteria (FindingCriteria(cfg, false)).
 	instr := &Instrumenter{
 		config:             config,

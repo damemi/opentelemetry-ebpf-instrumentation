@@ -13,12 +13,14 @@ import (
 // Option that override the instantiation of the instrumenter
 type Option func(info *global.ContextInfo)
 
-// WithDynamicPIDSelector passes the given dynamic PID selector into the App O11y pipeline. The caller
-// creates it with discover.NewDynamicPIDSelector(), passes it here, and then calls AddPIDs/RemovePIDs/GetPIDs
-// on it directly—no callback or reference to the instrumenter is needed.
+// WithDynamicPIDSelector passes the given dynamic PID selector into OBI. The caller creates it with
+// discover.NewDynamicPIDSelector(), passes it here, and then calls AddPIDs/RemovePIDs/GetPIDs on it
+// directly—no callback or reference to the instrumenter is needed.
+//
+// When set, App O11y uses it for process discovery. Network and stat metrics pipelines also restrict export to matching applications.
 func WithDynamicPIDSelector(sel *discover.DynamicPIDSelector) Option {
 	return func(info *global.ContextInfo) {
-		info.AppO11y.DynamicPIDSelector = sel
+		info.DynamicPIDSelector = sel
 	}
 }
 

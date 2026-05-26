@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/appolly/meta"
 	"go.opentelemetry.io/obi/pkg/docker"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
@@ -50,11 +51,13 @@ func RunWithContextInfo(
 		opt(ctxInfo)
 	}
 
-	// Enable App O11y when config enables it or when the caller passed a dynamic PID selector
-	// (allows an "empty" instrumenter that only instruments PIDs added via the selector).
-	app := cfg.Enabled(obi.FeatureAppO11y) || ctxInfo.AppO11y.DynamicPIDSelector != nil
-	net := cfg.Enabled(obi.FeatureNetO11y)
-	stats := cfg.Enabled(obi.FeatureStatsO11y)
+	dynSel := dynamicPIDSelector(ctxInfo)
+
+	// Enable App O11y when configured, or when dynamic PID selection is used for traces/app metrics.
+	app := cfg.Enabled(obi.FeatureAppO11y) || (dynSel != nil && dynamicAppO11yNeeded(cfg))
+	// Enable Net/Stats O11y when configured, or when dynamic selection is used with those metric features.
+	net := cfg.Enabled(obi.FeatureNetO11y) || (dynSel != nil && cfg.Metrics.Features.AnyNetwork())
+	stats := cfg.Enabled(obi.FeatureStatsO11y) || (dynSel != nil && cfg.Metrics.Features.StatMetrics())
 
 	// if one of nodes fail, the other should stop
 	g, ctx := errgroup.WithContext(ctx)
@@ -160,6 +163,15 @@ func setupStatsO11y(ctx context.Context, ctxInfo *global.ContextInfo, cfg *obi.C
 	}
 
 	return nil
+}
+
+func dynamicAppO11yNeeded(cfg *obi.Config) bool {
+	return cfg.Traces.Enabled() || cfg.Metrics.Features.AnyAppO11yMetric()
+}
+
+func dynamicPIDSelector(ctxInfo *global.ContextInfo) *discover.DynamicPIDSelector {
+	s, _ := ctxInfo.DynamicPIDSelector.(*discover.DynamicPIDSelector)
+	return s
 }
 
 func buildServiceNameTemplate(config *obi.Config) (*template.Template, error) {
