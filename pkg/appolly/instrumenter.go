@@ -111,13 +111,16 @@ func newGraphBuilder(
 	if exportableSpans == nil {
 		exportableSpans = msg2.QueueFromConfig[[]request.Span](config, "exportableSpans")
 	}
+	attrFilteredSpans := msg2.QueueFromConfig[[]request.Span](config, "attrFilteredSpans")
 	swi.Add(filter.ByAttribute(config.Filters.Application,
 		nil,
 		selectorCfg.ExtraGroupAttributesCfg,
 		spanPtrPromGetters(config),
 		nameResolverToAttrFilter,
-		exportableSpans),
+		attrFilteredSpans),
 		swarm.WithID("AttributesFilter"))
+	swi.Add(DynamicSignalSpanGate(ctxInfo.DynamicPIDSelector, attrFilteredSpans, exportableSpans),
+		swarm.WithID("DynamicSignalSpanGate"))
 
 	swi.Add(otel.TracesReceiver(
 		ctxInfo, config.Traces, config.SpanMetricsEnabledForTraces(), selectorCfg, exportableSpans,
@@ -126,7 +129,7 @@ func newGraphBuilder(
 		swarm.WithID("PrinterNode"))
 
 	// some nodes (ipNodesFilter, span name limiter...) are only passed to the metrics export nodes.
-	// Nodes directly handling raw traces will still get the unfiltered exportableSpans queue.
+	// The exportableSpans queue already carries any dynamic per-signal trace/metrics gating.
 	// If no metrics exporter is configured, we will not start the metrics subpipeline to save resources.
 	exportingMetrics := config.Metrics.Features.AnyAppO11yMetric() &&
 		(config.OTELMetrics.EndpointEnabled() || config.Prometheus.EndpointEnabled())
@@ -153,6 +156,9 @@ func setupMetricsSubPipeline(
 	processEventsCh *msg.Queue[exec.ProcessEvent],
 ) {
 	jointMetricsConfig := joinMetricsConfig(config)
+	metricsProcessEvents := msg2.QueueFromConfig[exec.ProcessEvent](config, "metricsProcessEvents")
+	swi.Add(DynamicSignalProcessEventGate(ctxInfo.DynamicPIDSelector, processEventsCh, metricsProcessEvents),
+		swarm.WithID("DynamicSignalProcessEventGate"))
 
 	spanNameAggregatedMetrics := msg2.QueueFromConfig[[]request.Span](config, "spanNameAggregatedMetrics")
 
@@ -176,7 +182,7 @@ func setupMetricsSubPipeline(
 		selectorCfg,
 		unresolvedCfg,
 		spanNameAggregatedMetrics,
-		processEventsCh,
+		metricsProcessEvents,
 	), swarm.WithID("OTELMetricsExport"))
 
 	swi.Add(otel.ReportSvcGraphMetrics(
@@ -185,7 +191,7 @@ func setupMetricsSubPipeline(
 		jointMetricsConfig,
 		unresolvedCfg,
 		spanNameAggregatedMetrics,
-		processEventsCh,
+		metricsProcessEvents,
 	), swarm.WithID("OTELSvcGraphMetricsExport"))
 
 	swi.Add(prom.PrometheusEndpoint(
@@ -195,7 +201,7 @@ func setupMetricsSubPipeline(
 		selectorCfg,
 		unresolvedCfg,
 		spanNameAggregatedMetrics,
-		processEventsCh,
+		metricsProcessEvents,
 	), swarm.WithID("PrometheusEndpoint"))
 }
 

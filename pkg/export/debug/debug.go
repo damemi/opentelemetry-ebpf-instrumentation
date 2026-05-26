@@ -72,8 +72,9 @@ func textPrinter(in *msg.Queue[[]request.Span]) swarm.RunFunc {
 	input := in.Subscribe(msg.SubscriberName("textPrinter"))
 	return func(ctx context.Context) {
 		swarms.ForEachInput(ctx, input, nil, func(spans []request.Span) {
-			for i := range spans {
-				printSpan(&spans[i])
+			filtered := traceVisibleSpans(spans)
+			for i := range filtered {
+				printSpan(&filtered[i])
 			}
 		})
 	}
@@ -129,11 +130,23 @@ func printSpan(span *request.Span) {
 }
 
 func serializeSpansJSON(spans []request.Span, indent bool) ([]byte, error) {
+	spans = traceVisibleSpans(spans)
 	if indent {
 		return json.MarshalIndent(spans, "", " ")
 	}
 
 	return json.Marshal(spans)
+}
+
+func traceVisibleSpans(spans []request.Span) []request.Span {
+	out := make([]request.Span, 0, len(spans))
+	for i := range spans {
+		if request.IgnoreTraces(&spans[i]) {
+			continue
+		}
+		out = append(out, spans[i])
+	}
+	return out
 }
 
 func jsonPrinter(in *msg.Queue[[]request.Span], indent bool) swarm.RunFunc {
@@ -163,7 +176,7 @@ func counterPrinter(in *msg.Queue[[]request.Span]) swarm.RunFunc {
 	counter := 0
 	return func(_ context.Context) {
 		for spans := range input {
-			counter += len(spans)
+			counter += len(traceVisibleSpans(spans))
 		}
 
 		fmt.Printf("Processed %d requests\n", counter)
