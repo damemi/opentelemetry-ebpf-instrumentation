@@ -686,7 +686,7 @@ func TestCriteriaMatcher_DynamicTargetPIDs(t *testing.T) {
 	processInfo = func(pp ProcessAttrs) (*services.ProcessInfo, error) {
 		return &services.ProcessInfo{Pid: pp.pid, ExePath: "/any/exe", OpenPorts: pp.openPorts}, nil
 	}
-	runFn, err := dynamicMatcherProvider(discoveredProcesses, filteredProcessesQu, dynamicSelector)(t.Context())
+	runFn, err := dynamicMatcherProvider(discoveredProcesses, filteredProcessesQu, dynamicSelector.appSignals())(t.Context())
 	require.NoError(t, err)
 	go runFn(t.Context())
 	time.Sleep(50 * time.Millisecond)
@@ -735,7 +735,7 @@ func TestCriteriaMatcher_DynamicTargetPIDs_RemoveNotification(t *testing.T) {
 	processInfo = func(pp ProcessAttrs) (*services.ProcessInfo, error) {
 		return &services.ProcessInfo{Pid: pp.pid, ExePath: "/any/exe", OpenPorts: pp.openPorts}, nil
 	}
-	runFn, err := dynamicMatcherProvider(discoveredProcesses, filteredProcessesQu, dynamicSelector)(t.Context())
+	runFn, err := dynamicMatcherProvider(discoveredProcesses, filteredProcessesQu, dynamicSelector.appSignals())(t.Context())
 	require.NoError(t, err)
 	go runFn(t.Context())
 	time.Sleep(50 * time.Millisecond)

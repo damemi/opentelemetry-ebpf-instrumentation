@@ -15,9 +15,10 @@ type Option func(info *global.ContextInfo)
 
 // WithDynamicPIDSelector passes the given dynamic PID selector into OBI. The caller creates it with
 // discover.NewDynamicPIDSelector(), passes it here, and then calls AddPIDs/RemovePIDs/GetPIDs on it
-// directly—no callback or reference to the instrumenter is needed.
+// directly, or targets specific signals via subviews such as Traces(), AppMetrics(),
+// NetworkMetrics(), and StatsMetrics().
 //
-// When set, App O11y uses it for process discovery. Network and stat metrics pipelines also restrict export to matching applications.
+// Root AddPIDs/RemovePIDs preserve the legacy behavior and apply to all supported signals.
 func WithDynamicPIDSelector(sel *discover.DynamicPIDSelector) Option {
 	return func(info *global.ContextInfo) {
 		info.DynamicPIDSelector = sel
