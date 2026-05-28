@@ -4,12 +4,13 @@ Generic SunRPC over TCP is detected in userspace and exported as traces when `su
 
 ## What is captured
 
-Spans are created from the cleartext RPC header of `CALL` messages:
+Spans are created from the cleartext RPC header of `CALL` messages using [ONC RPC semantic conventions](https://opentelemetry.io/docs/specs/semconv/registry/attributes/onc-rpc/):
 
-- `rpc.system` = `sunrpc`
-- `rpc.service` = program name when known (for example `nfs`, `mount`, `portmapper`), otherwise the numeric program id
-- `rpc.method` = procedure number (or a known procedure name when mapped)
-- `sunrpc.auth.flavor` = authentication flavor when present (for example `rpcsec_gss`)
+- `rpc.system` = `onc_rpc` (via `semconv.RPCSystemOncRPC`)
+- `onc_rpc.program.name` — program name when known (for example `nfs`, `mount`, `portmapper`)
+- `onc_rpc.procedure.number` — procedure number from the CALL header
+- `onc_rpc.procedure.name` — set when a procedure name mapping exists
+- `onc_rpc.version` — program version from the CALL header
 
 Accepted-reply status from the paired response buffer sets span error status when the accept stat is not `SUCCESS`.
 

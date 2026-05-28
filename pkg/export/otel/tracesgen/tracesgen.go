@@ -1170,19 +1170,29 @@ func TraceAttributesSelector(span *request.Span, optionalAttrs map[attr.Name]str
 
 		attrs = append(attrs, request.PeerService(request.PeerServiceFromSpan(span)))
 	case request.EventTypeSunRPCServer, request.EventTypeSunRPCClient:
-		service := span.Path
-		if service == "" {
-			service = "sunrpc"
-		}
+		// https://opentelemetry.io/docs/specs/semconv/registry/attributes/onc-rpc/
 		attrs = []attribute.KeyValue{
 			request.ServerAddr(request.HostAsServer(span)),
 			request.ServerPort(span.HostPort),
-			semconv.RPCSystemKey.String("sunrpc"),
-			semconv.RPCService(service),
-			semconv.RPCMethod(span.Method),
+			semconv.RPCSystemOncRPC,
 		}
+		if span.Path != "" {
+			attrs = append(attrs, semconv.OncRPCProgramName(span.Path))
+		}
+		if span.Route != "" {
+			if proc, err := strconv.Atoi(span.Route); err == nil {
+				attrs = append(attrs, semconv.OncRPCProcedureNumber(proc))
+			}
+		}
+		if span.Method != "" && span.Method != span.Route {
+			attrs = append(attrs, semconv.OncRPCProcedureName(span.Method))
+		}
+		if span.SubType != 0 {
+			attrs = append(attrs, semconv.OncRPCVersion(int(span.SubType)))
+		}
+		// Cred flavor (e.g. rpcsec_gss) is not in the onc_rpc attribute registry yet.
 		if span.Statement != "" {
-			attrs = append(attrs, attribute.String("sunrpc.auth.flavor", span.Statement))
+			attrs = append(attrs, attribute.String("rpc.auth.flavor", span.Statement))
 		}
 		if span.Type == request.EventTypeSunRPCClient {
 			attrs = append(attrs, request.PeerService(request.PeerServiceFromSpan(span)))

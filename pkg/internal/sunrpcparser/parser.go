@@ -21,11 +21,12 @@ const (
 
 	acceptSuccess = 0
 
-	authNull       = 0
-	authUnix       = 1
-	authShort      = 2
-	authDES        = 3
-	authRPCSECgss  = 6
+	// auth_flavor_t values from RFC 5531 / rpc_auth.h (AUTH_*).
+	authNull      = 0
+	authUnix      = 1
+	authShort     = 2
+	authDES       = 3
+	authRPCSECgss = 6 // RPCSEC_GSS (RFC 2203); flavor 6 in ONC RPC cred blocks
 
 	rmLastFrag = 0x80000000
 	rmFragLen  = 0x7fffffff

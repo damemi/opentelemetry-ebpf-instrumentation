@@ -3,7 +3,14 @@
 
 package sunrpcparser
 
-// Well-known RPC program numbers (rpcbind / ONC RPC).
+// Well-known ONC RPC program numbers used for onc_rpc.program.name.
+//
+// Sources: [RFC 5531] (RPC model), program numbers assigned in the RPC
+// literature and Linux/NFS deployments (portmapper 100000, NFS 100003, mount
+// 100005, etc.). See also IANA "RPC Program Numbers" and /etc/rpc on typical
+// Unix systems.
+//
+// [RFC 5531]: https://datatracker.ietf.org/doc/html/rfc5531
 const (
 	ProgramPortmapper = 100000
 	ProgramRstat      = 100001

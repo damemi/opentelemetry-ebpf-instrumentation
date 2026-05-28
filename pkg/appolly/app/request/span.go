@@ -1224,12 +1224,14 @@ func spanAttributes(s *Span) SpanAttributes {
 		}
 	case EventTypeSunRPCServer, EventTypeSunRPCClient:
 		return SpanAttributes{
-			"serverAddr":  SpanHost(s),
-			"serverPort":  strconv.Itoa(s.HostPort),
-			"operation":   s.Method,
-			"rpcProgram":  s.Path,
-			"authFlavor":  s.Statement,
-			"status":      strconv.Itoa(s.Status),
+			"serverAddr":                      SpanHost(s),
+			"serverPort":                      strconv.Itoa(s.HostPort),
+			attr.OncRPCProgramName.Prom():     s.Path,
+			attr.OncRPCProcedureNumber.Prom(): s.Route,
+			attr.OncRPCProcedureName.Prom():   s.Method,
+			attr.OncRPCVersion.Prom():         strconv.Itoa(int(s.SubType)),
+			"authFlavor":                      s.Statement,
+			"status":                          strconv.Itoa(s.Status),
 		}
 	case EventTypeGPUCudaKernelLaunch:
 		return SpanAttributes{

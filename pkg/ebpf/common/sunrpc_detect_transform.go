@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
@@ -133,20 +134,18 @@ func TCPToSunRPCToSpan(trace *TCPRequestInfo, data *SunRPCInfo) request.Span {
 		spanType = request.EventTypeSunRPCServer
 	}
 
-	statement := data.AuthFlavor
-	if data.Version != 0 {
-		if statement != "" {
-			statement = fmt.Sprintf("%s v%d", statement, data.Version)
-		} else {
-			statement = fmt.Sprintf("v%d", data.Version)
-		}
+	var subType uint8
+	if data.Version > 0 && data.Version <= 255 {
+		subType = uint8(data.Version)
 	}
 
 	return request.Span{
 		Type:          spanType,
 		Method:        data.Method,
 		Path:          data.ProgramName,
-		Statement:     statement,
+		Route:         strconv.FormatUint(uint64(data.Procedure), 10),
+		Statement:     data.AuthFlavor,
+		SubType:       subType,
 		Peer:          peer,
 		PeerPort:      peerPort,
 		Host:          hostname,
