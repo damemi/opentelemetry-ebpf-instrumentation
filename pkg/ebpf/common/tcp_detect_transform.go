@@ -274,6 +274,9 @@ func detectHeuristicProtocol(parseCtx *EBPFParseContext, event *TCPRequestInfo, 
 	if span, ignore, matched, err := matchAMQP(parseCtx, event, requestBuffer, responseBuffer); matched {
 		return span, ignore, matched, err
 	}
+	if span, ignore, matched, err := matchSunRPC(parseCtx, event, requestBuffer, responseBuffer); matched {
+		return span, ignore, matched, err
+	}
 	if span, ignore, matched, err := matchMQTT(event, requestBuffer, responseBuffer); matched {
 		return span, ignore, matched, err
 	}
