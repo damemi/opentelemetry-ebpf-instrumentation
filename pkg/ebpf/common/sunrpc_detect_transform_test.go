@@ -19,7 +19,7 @@ func TestMatchSunRPC_NFSCallClientSpan(t *testing.T) {
 	call := buildSunRPCCallRecord(7, sunrpcparser.ProgramNFS, 3, 6, sunrpcparser.AuthFlavorName(6))
 	reply := buildSunRPCAcceptedReply(7, 0)
 
-	event := &TCPRequestInfo{}
+	event := &TCPRequestInfo{Direction: directionSend}
 	req := largebuf.NewLargeBufferFrom(append(wrapSunRPCTCPRecord(call), wrapSunRPCTCPRecord(reply)...))
 	resp := largebuf.NewLargeBuffer()
 
@@ -36,7 +36,7 @@ func TestMatchSunRPC_NFSCallClientSpan(t *testing.T) {
 func TestMatchSunRPC_ServerSpan(t *testing.T) {
 	call := buildSunRPCCallRecord(9, sunrpcparser.ProgramMount, 3, 1, "auth_null")
 
-	event := &TCPRequestInfo{IsServer: true}
+	event := &TCPRequestInfo{Direction: directionRecv}
 	req := largebuf.NewLargeBufferFrom(wrapSunRPCTCPRecord(call))
 	resp := largebuf.NewLargeBuffer()
 
@@ -46,6 +46,20 @@ func TestMatchSunRPC_ServerSpan(t *testing.T) {
 	assert.False(t, ignore)
 	assert.Equal(t, request.EventTypeSunRPCServer, span.Type)
 	assert.Equal(t, "mount", span.Path)
+}
+
+func TestMatchSunRPC_ClientSpan(t *testing.T) {
+	call := buildSunRPCCallRecord(9, sunrpcparser.ProgramMount, 3, 1, "auth_null")
+
+	event := &TCPRequestInfo{Direction: directionSend}
+	req := largebuf.NewLargeBufferFrom(wrapSunRPCTCPRecord(call))
+	resp := largebuf.NewLargeBuffer()
+
+	span, ignore, matched, err := matchSunRPC(NewEBPFParseContext(nil, nil, nil), event, req, resp)
+	require.NoError(t, err)
+	require.True(t, matched)
+	assert.False(t, ignore)
+	assert.Equal(t, request.EventTypeSunRPCClient, span.Type)
 }
 
 func TestMatchSunRPC_notSunRPC(t *testing.T) {
@@ -62,7 +76,7 @@ func TestDispatchSunRPC_KernelClassified(t *testing.T) {
 	call := buildSunRPCCallRecord(11, sunrpcparser.ProgramPortmapper, 2, 0, "auth_null")
 	reply := buildSunRPCAcceptedReply(11, 0)
 
-	event := &TCPRequestInfo{ProtocolType: ProtocolTypeSunRPC}
+	event := &TCPRequestInfo{ProtocolType: ProtocolTypeSunRPC, Direction: directionSend}
 	req := largebuf.NewLargeBufferFrom(append(wrapSunRPCTCPRecord(call), wrapSunRPCTCPRecord(reply)...))
 	resp := largebuf.NewLargeBuffer()
 

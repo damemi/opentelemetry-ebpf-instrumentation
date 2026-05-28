@@ -130,7 +130,10 @@ func TCPToSunRPCToSpan(trace *TCPRequestInfo, data *SunRPCInfo) request.Span {
 	}
 
 	spanType := request.EventTypeSunRPCClient
-	if trace.IsServer {
+	// Match NATS/MQTT: Direction reflects who sent the CALL (recv on server, send on client).
+	// IsServer relies on is_listening(d_port), which fails when both peers use ports >= 32768
+	// (typical for svctcp_create dynamic bind + client ephemeral).
+	if trace.Direction == directionRecv {
 		spanType = request.EventTypeSunRPCServer
 	}
 
