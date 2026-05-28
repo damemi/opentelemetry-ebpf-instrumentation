@@ -249,7 +249,8 @@ func matchMemcachedNoreply(parseCtx *EBPFParseContext, event *TCPRequestInfo, re
 }
 
 // detectHeuristicProtocol runs heuristic-based protocol detection as a last resort:
-// Redis, Memcached, HTTP/2, NATS, AMQP, MQTT, and Kafka (for packets the kernel couldn't classify).
+// Redis, Memcached, HTTP/2, NATS, AMQP, MQTT, Kafka (for packets the kernel couldn't classify),
+// and SunRPC.
 func detectHeuristicProtocol(parseCtx *EBPFParseContext, event *TCPRequestInfo, requestBuffer, responseBuffer *largebuf.LargeBuffer) (request.Span, bool, bool, error) {
 	if span, ignore, matched, err := matchRedis(parseCtx, event, requestBuffer, responseBuffer); matched {
 		return span, ignore, matched, err
@@ -274,15 +275,16 @@ func detectHeuristicProtocol(parseCtx *EBPFParseContext, event *TCPRequestInfo, 
 	if span, ignore, matched, err := matchAMQP(parseCtx, event, requestBuffer, responseBuffer); matched {
 		return span, ignore, matched, err
 	}
-	if span, ignore, matched, err := matchSunRPC(parseCtx, event, requestBuffer, responseBuffer); matched {
-		return span, ignore, matched, err
-	}
 	if span, ignore, matched, err := matchMQTT(event, requestBuffer, responseBuffer); matched {
 		return span, ignore, matched, err
 	}
 
 	// Kafka can arrive here for packets the kernel couldn't classify (e.g. OBI attached mid-connection).
 	if span, ignore, matched, err := matchKafkaFallback(event, requestBuffer, responseBuffer, parseCtx.kafkaTopicUUIDToName); matched {
+		return span, ignore, matched, err
+	}
+
+	if span, ignore, matched, err := matchSunRPC(parseCtx, event, requestBuffer, responseBuffer); matched {
 		return span, ignore, matched, err
 	}
 
