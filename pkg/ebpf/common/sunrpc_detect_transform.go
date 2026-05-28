@@ -30,11 +30,18 @@ func ProcessPossibleSunRPCEvent(event *TCPRequestInfo, pkt, rpkt *largebuf.Large
 	reqInfo, reqIgnore, reqErr := processSunRPCBuffer(pkt)
 	respInfo, respIgnore, respErr := processSunRPCBuffer(rpkt)
 
+	reqCall := reqErr == nil && !reqIgnore && isSunRPCCallInfo(reqInfo)
+	respCall := respErr == nil && !respIgnore && isSunRPCCallInfo(respInfo)
+
 	switch {
+	case reqCall:
+		mergeSunRPCReplyStatus(reqInfo, respInfo, respErr, respIgnore)
+		return reqInfo, false, nil
+	case respCall:
+		reverseTCPEvent(event)
+		mergeSunRPCReplyStatus(respInfo, reqInfo, reqErr, reqIgnore)
+		return respInfo, false, nil
 	case reqErr == nil && !reqIgnore && reqInfo != nil:
-		if respErr == nil && !respIgnore && respInfo != nil && respInfo.Status != 0 {
-			reqInfo.Status = respInfo.Status
-		}
 		return reqInfo, false, nil
 	case respErr == nil && !respIgnore && respInfo != nil:
 		reverseTCPEvent(event)
@@ -48,6 +55,19 @@ func ProcessPossibleSunRPCEvent(event *TCPRequestInfo, pkt, rpkt *largebuf.Large
 	}
 
 	return nil, true, errors.Join(reqErr, respErr)
+}
+
+func isSunRPCCallInfo(info *SunRPCInfo) bool {
+	return info != nil && info.Method != "reply"
+}
+
+func mergeSunRPCReplyStatus(callInfo *SunRPCInfo, replyInfo *SunRPCInfo, replyErr error, replyIgnore bool) {
+	if callInfo == nil || replyErr != nil || replyIgnore || replyInfo == nil {
+		return
+	}
+	if replyInfo.Status != 0 {
+		callInfo.Status = replyInfo.Status
+	}
 }
 
 func processSunRPCBuffer(pkt *largebuf.LargeBuffer) (*SunRPCInfo, bool, error) {
@@ -129,13 +149,7 @@ func TCPToSunRPCToSpan(trace *TCPRequestInfo, data *SunRPCInfo) request.Span {
 		hostPort = int(trace.ConnInfo.D_port)
 	}
 
-	spanType := request.EventTypeSunRPCClient
-	// Match NATS/MQTT: Direction reflects who sent the CALL (recv on server, send on client).
-	// IsServer relies on is_listening(d_port), which fails when both peers use ports >= 32768
-	// (typical for svctcp_create dynamic bind + client ephemeral).
-	if trace.Direction == directionRecv {
-		spanType = request.EventTypeSunRPCServer
-	}
+	spanType := sunRPCSpanType(trace, data)
 
 	var subType int
 	if data.Version > 0 && data.Version <= 255 {
@@ -167,6 +181,19 @@ func TCPToSunRPCToSpan(trace *TCPRequestInfo, data *SunRPCInfo) request.Span {
 			Namespace: trace.Pid.Ns,
 		},
 	}
+}
+
+func sunRPCSpanType(trace *TCPRequestInfo, data *SunRPCInfo) request.EventType {
+	// For CALL spans, recv on server and send on client (same as NATS/MQTT/Redis).
+	serverOnRecv := trace.Direction == directionRecv
+	// Reply-only spans (missed CALL leg): Direction reflects the REPLY leg, so invert.
+	if !isSunRPCCallInfo(data) {
+		serverOnRecv = !serverOnRecv
+	}
+	if serverOnRecv {
+		return request.EventTypeSunRPCServer
+	}
+	return request.EventTypeSunRPCClient
 }
 
 func matchSunRPC(_ *EBPFParseContext, event *TCPRequestInfo, requestBuffer, responseBuffer *largebuf.LargeBuffer) (request.Span, bool, bool, error) { //nolint:unparam

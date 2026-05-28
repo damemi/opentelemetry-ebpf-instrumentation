@@ -62,6 +62,52 @@ func TestMatchSunRPC_ClientSpan(t *testing.T) {
 	assert.Equal(t, request.EventTypeSunRPCClient, span.Type)
 }
 
+func TestMatchSunRPC_ReplyOnlyServerSpan(t *testing.T) {
+	reply := buildSunRPCAcceptedReply(9, 0)
+
+	event := &TCPRequestInfo{Direction: directionSend}
+	req := largebuf.NewLargeBufferFrom(wrapSunRPCTCPRecord(reply))
+	resp := largebuf.NewLargeBuffer()
+
+	span, ignore, matched, err := matchSunRPC(NewEBPFParseContext(nil, nil, nil), event, req, resp)
+	require.NoError(t, err)
+	require.True(t, matched)
+	assert.False(t, ignore)
+	assert.Equal(t, request.EventTypeSunRPCServer, span.Type)
+	assert.Equal(t, "reply", span.Method)
+}
+
+func TestMatchSunRPC_ReplyOnlyClientSpan(t *testing.T) {
+	reply := buildSunRPCAcceptedReply(9, 0)
+
+	event := &TCPRequestInfo{Direction: directionRecv}
+	req := largebuf.NewLargeBufferFrom(wrapSunRPCTCPRecord(reply))
+	resp := largebuf.NewLargeBuffer()
+
+	span, ignore, matched, err := matchSunRPC(NewEBPFParseContext(nil, nil, nil), event, req, resp)
+	require.NoError(t, err)
+	require.True(t, matched)
+	assert.False(t, ignore)
+	assert.Equal(t, request.EventTypeSunRPCClient, span.Type)
+}
+
+func TestMatchSunRPC_PrefersCallInResponseBuffer(t *testing.T) {
+	call := buildSunRPCCallRecord(9, sunrpcparser.ProgramMount, 3, 1, "auth_null")
+	reply := buildSunRPCAcceptedReply(9, 0)
+
+	event := &TCPRequestInfo{Direction: directionSend}
+	req := largebuf.NewLargeBufferFrom(wrapSunRPCTCPRecord(reply))
+	resp := largebuf.NewLargeBufferFrom(wrapSunRPCTCPRecord(call))
+
+	span, ignore, matched, err := matchSunRPC(NewEBPFParseContext(nil, nil, nil), event, req, resp)
+	require.NoError(t, err)
+	require.True(t, matched)
+	assert.False(t, ignore)
+	assert.Equal(t, request.EventTypeSunRPCServer, span.Type)
+	assert.Equal(t, "mount", span.Path)
+	assert.Equal(t, uint8(directionRecv), event.Direction)
+}
+
 func TestMatchSunRPC_notSunRPC(t *testing.T) {
 	event := &TCPRequestInfo{}
 	req := largebuf.NewLargeBufferFrom([]byte("NOT RPC"))
