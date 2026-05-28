@@ -351,17 +351,25 @@ func getDefinitions(
 		RPCClientDuration.Section: {
 			SubGroups: []*AttrReportGroup{&appAttributes, &grpcClientInfo},
 			Attributes: map[attr.Name]Default{
-				attr.RPCMethod:         true,
-				attr.RPCSystem:         true,
-				attr.RPCGRPCStatusCode: true,
+				attr.RPCMethod:              true,
+				attr.RPCSystem:              true,
+				attr.RPCGRPCStatusCode:      true,
+				attr.OncRPCProgramName:      true,
+				attr.OncRPCProcedureNumber:  true,
+				attr.OncRPCProcedureName:    false,
+				attr.OncRPCVersion:          true,
 			},
 		},
 		RPCServerDuration.Section: {
 			SubGroups: []*AttrReportGroup{&appAttributes, &serverInfo},
 			Attributes: map[attr.Name]Default{
-				attr.RPCMethod:         true,
-				attr.RPCSystem:         true,
-				attr.RPCGRPCStatusCode: true,
+				attr.RPCMethod:              true,
+				attr.RPCSystem:              true,
+				attr.RPCGRPCStatusCode:      true,
+				attr.OncRPCProgramName:      true,
+				attr.OncRPCProcedureNumber:  true,
+				attr.OncRPCProcedureName:    false,
+				attr.OncRPCVersion:          true,
 			},
 		},
 		DBClientDuration.Section: {

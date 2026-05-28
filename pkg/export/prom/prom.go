@@ -1036,6 +1036,14 @@ func (r *metricsReporter) observe(span *request.Span) {
 			if r.is.GRPCEnabled() {
 				r.observeHistogram(r.grpcClientDuration.WithLabelValues(labelValues(span, r.attrGRPCClientDuration)...).Metric, duration, span)
 			}
+		case request.EventTypeSunRPCClient:
+			if r.is.SunRPCEnabled() {
+				r.observeHistogram(r.grpcClientDuration.WithLabelValues(labelValues(span, r.attrGRPCClientDuration)...).Metric, duration, span)
+			}
+		case request.EventTypeSunRPCServer:
+			if r.is.SunRPCEnabled() {
+				r.observeHistogram(r.grpcDuration.WithLabelValues(labelValues(span, r.attrGRPCDuration)...).Metric, duration, span)
+			}
 		case request.EventTypeRedisClient, request.EventTypeSQLClient, request.EventTypeRedisServer, request.EventTypeMongoClient, request.EventTypeCouchbaseClient, request.EventTypeMemcachedClient, request.EventTypeMemcachedServer:
 			if r.is.DBEnabled() {
 				r.observeHistogram(r.dbClientDuration.WithLabelValues(labelValues(span, r.attrDBClientDuration)...).Metric, duration, span)

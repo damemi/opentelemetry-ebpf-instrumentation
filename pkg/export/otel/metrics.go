@@ -922,6 +922,16 @@ func (r *Metrics) record(span *request.Span, mr *MetricsReporter) {
 				grpcClientDuration, attrs := r.grpcClientDuration.ForRecord(span)
 				grpcClientDuration.Record(ctx, duration, instrument.WithAttributeSet(attrs))
 			}
+		case request.EventTypeSunRPCClient:
+			if mr.is.SunRPCEnabled() {
+				grpcClientDuration, attrs := r.grpcClientDuration.ForRecord(span)
+				grpcClientDuration.Record(ctx, duration, instrument.WithAttributeSet(attrs))
+			}
+		case request.EventTypeSunRPCServer:
+			if mr.is.SunRPCEnabled() {
+				grpcDuration, attrs := r.grpcDuration.ForRecord(span)
+				grpcDuration.Record(ctx, duration, instrument.WithAttributeSet(attrs))
+			}
 		case request.EventTypeHTTPClient:
 			// HTTP client subtypes that are database calls get recorded as db client metrics
 			if mr.is.DBEnabled() && (span.SubType == request.HTTPSubtypeSQLPP || span.SubType == request.HTTPSubtypeElasticsearch) {

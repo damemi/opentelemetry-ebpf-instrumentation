@@ -134,9 +134,9 @@ func TCPToSunRPCToSpan(trace *TCPRequestInfo, data *SunRPCInfo) request.Span {
 		spanType = request.EventTypeSunRPCServer
 	}
 
-	var subType uint8
+	var subType int
 	if data.Version > 0 && data.Version <= 255 {
-		subType = uint8(data.Version)
+		subType = int(data.Version)
 	}
 
 	return request.Span{
