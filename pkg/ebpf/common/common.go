@@ -84,6 +84,7 @@ const (
 	ProtocolTypeKafka
 	ProtocolTypeMQTT // placeholder for future kernel-space detection
 	ProtocolTypeMSSQL
+	ProtocolTypeSunRPC
 	ProtocolTypeNATS // placeholder for future kernel-space detection
 	ProtocolTypeAMQP // placeholder for future kernel-space detection
 )

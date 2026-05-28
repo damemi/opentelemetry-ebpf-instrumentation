@@ -1,6 +1,14 @@
 # OBI SunRPC (ONC RPC) protocol parser
 
-Generic SunRPC over TCP is detected in userspace and exported when `sunrpc` instrumentation is enabled.
+Generic SunRPC over TCP is detected in the kernel on the first valid CALL or REPLY record and exported when `sunrpc` instrumentation is enabled. Userspace heuristics remain as a fallback when OBI attaches mid-connection.
+
+## Detection
+
+Kernel eBPF classifies SunRPC connections (`k_protocol_type_sunrpc`) when the first TCP record contains a valid ONC RPC CALL or REPLY header (record marking, RPC version 2, known program range, valid auth flavor). The connection is cached in `protocol_cache` so later packets skip generic protocol heuristics.
+
+If classification happens after the first RPC (for example OBI started mid-connection), userspace fallback parsing in `matchSunRPC` still handles the traffic.
+
+Implementation: `bpf/generictracer/protocol_sunrpc.h`, `pkg/ebpf/common/sunrpc_detect_transform.go`.
 
 ## Protocol Overview
 
@@ -42,7 +50,7 @@ Enable metrics with `instrumentations: [sunrpc]` under `otel_metrics` or `promet
 ## Limitations
 
 - TCP only (no UDP SunRPC).
-- Userspace heuristic detection only (no kernel `protocol_type` classifier yet).
+- Kernel classification requires a complete single-fragment TCP record in the captured buffer.
 - RPCSEC_GSS hides procedure arguments; only header fields are visible.
 - No distributed context propagation on SunRPC.
 - Procedure names are not mapped yet (procedure number only unless extended).

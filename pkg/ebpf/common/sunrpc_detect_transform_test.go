@@ -58,6 +58,23 @@ func TestMatchSunRPC_notSunRPC(t *testing.T) {
 	assert.False(t, matched)
 }
 
+func TestDispatchSunRPC_KernelClassified(t *testing.T) {
+	call := buildSunRPCCallRecord(11, sunrpcparser.ProgramPortmapper, 2, 0, "auth_null")
+	reply := buildSunRPCAcceptedReply(11, 0)
+
+	event := &TCPRequestInfo{ProtocolType: ProtocolTypeSunRPC}
+	req := largebuf.NewLargeBufferFrom(append(wrapSunRPCTCPRecord(call), wrapSunRPCTCPRecord(reply)...))
+	resp := largebuf.NewLargeBuffer()
+
+	span, ignore, matched, err := dispatchSunRPC(event, req, resp)
+	require.NoError(t, err)
+	require.True(t, matched)
+	assert.False(t, ignore)
+	assert.Equal(t, request.EventTypeSunRPCClient, span.Type)
+	assert.Equal(t, "portmapper", span.Path)
+	assert.Equal(t, "0", span.Method)
+}
+
 func buildSunRPCCallRecord(xid, prog, vers, proc uint32, authFlavor string) []byte {
 	var flavor uint32
 	switch authFlavor {
