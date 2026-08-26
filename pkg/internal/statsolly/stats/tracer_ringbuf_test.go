@@ -24,23 +24,27 @@ import (
 const traceLoopTestTimeout = time.Second
 
 const (
-	wireSizeTCPRtt              = 44
-	wireSizeTCPFailedConnection = 40
-	wireSizeTCPRetransmit       = 40
-	wireSizeTCPIo               = 80
+	wireSizeTCPRtt              = 48
+	wireSizeTCPFailedConnection = 44
+	wireSizeTCPRetransmit       = 44
+	wireSizeTCPIo               = 84
 
 	wireFlagsOffset          = 0
 	wireRttRoleOffset        = 1
 	wireRttValueOffset       = 4
-	wireRttConnOffset        = 8
+	wireRttPidOffset         = 8
+	wireRttConnOffset        = 12
 	wireFailedReasonOffset   = 1
 	wireFailedRoleOffset     = 2
-	wireFailedConnOffset     = 4
-	wireRetransmitConnOffset = 4
+	wireFailedPidOffset      = 4
+	wireFailedConnOffset     = 8
+	wireRetransmitPidOffset  = 4
+	wireRetransmitConnOffset = 8
 	wireTCPIoDirectionOffset = 1
 	wireTCPIoCountOffset     = 2
-	wireTCPIoBytesOffset     = 4
-	wireTCPIoConnOffset      = 44
+	wireTCPIoPidOffset       = 4
+	wireTCPIoBytesOffset     = 8
+	wireTCPIoConnOffset      = 48
 	wireConnSrcAddrOffset    = 0
 	wireConnDstAddrOffset    = 16
 	wireConnSrcPortOffset    = 32
@@ -72,10 +76,18 @@ func TestParseStatDecodesEveryEventType(t *testing.T) {
 		D_addr: testIP("203.0.113.20"),
 		D_port: 8443,
 	}
+	const (
+		rttPid        = 4242
+		failedPid     = 4243
+		retransmitPid = 4244
+		tcpIoPid      = 4245
+	)
+
 	rttRaw := newWireStat(ebpf.StatTypeTCPRtt, wireSizeTCPRtt, wireRttConnOffset, ipv4Conn)
 	rttRaw[wireRttRoleOffset] = uint8(ebpf.CodeRoleServer)
 	rttRaw[2], rttRaw[3] = 0xa1, 0xa2
 	binary.NativeEndian.PutUint32(rttRaw[wireRttValueOffset:], 12500)
+	binary.NativeEndian.PutUint32(rttRaw[wireRttPidOffset:], rttPid)
 	failedRaw := newWireStat(
 		ebpf.StatTypeTCPFailedConnection,
 		wireSizeTCPFailedConnection,
@@ -85,6 +97,7 @@ func TestParseStatDecodesEveryEventType(t *testing.T) {
 	failedRaw[wireFailedReasonOffset] = uint8(ebpf.CodeConnectionRefused)
 	failedRaw[wireFailedRoleOffset] = uint8(ebpf.CodeRoleClient)
 	failedRaw[3] = 0xb1
+	binary.NativeEndian.PutUint32(failedRaw[wireFailedPidOffset:], failedPid)
 	retransmitRaw := newWireStat(
 		ebpf.StatTypeTCPRetransmit,
 		wireSizeTCPRetransmit,
@@ -92,9 +105,11 @@ func TestParseStatDecodesEveryEventType(t *testing.T) {
 		oneZeroPortConn,
 	)
 	retransmitRaw[1], retransmitRaw[2], retransmitRaw[3] = 0xc1, 0xc2, 0xc3
+	binary.NativeEndian.PutUint32(retransmitRaw[wireRetransmitPidOffset:], retransmitPid)
 	tcpIoRaw := newWireStat(ebpf.StatTypeTCPIo, wireSizeTCPIo, wireTCPIoConnOffset, ipv4Conn)
 	tcpIoRaw[wireTCPIoDirectionOffset] = uint8(ebpf.CodeDirectionTransmit)
 	tcpIoRaw[wireTCPIoCountOffset], tcpIoRaw[3] = 3, 0xd1
+	binary.NativeEndian.PutUint32(tcpIoRaw[wireTCPIoPidOffset:], tcpIoPid)
 	putWireBytes(tcpIoRaw, [ebpf.TCPIoBatchSize]uint32{100, 200, 300, 400})
 
 	tests := []struct {
@@ -111,7 +126,7 @@ func TestParseStatDecodesEveryEventType(t *testing.T) {
 					SrttUs: 12500,
 					Role:   uint8(ebpf.CodeRoleServer),
 				},
-				CommonAttrs: commonAttrs(ipv4Conn),
+				CommonAttrs: commonAttrs(ipv4Conn, rttPid),
 			},
 		},
 		{
@@ -123,7 +138,7 @@ func TestParseStatDecodesEveryEventType(t *testing.T) {
 					Reason: uint8(ebpf.CodeConnectionRefused),
 					Role:   uint8(ebpf.CodeRoleClient),
 				},
-				CommonAttrs: commonAttrs(ipv6Conn),
+				CommonAttrs: commonAttrs(ipv6Conn, failedPid),
 			},
 		},
 		{
@@ -132,7 +147,7 @@ func TestParseStatDecodesEveryEventType(t *testing.T) {
 			want: &ebpf.Stat{
 				Type:          ebpf.StatTypeTCPRetransmit,
 				TCPRetransmit: true,
-				CommonAttrs:   commonAttrs(oneZeroPortConn),
+				CommonAttrs:   commonAttrs(oneZeroPortConn, retransmitPid),
 			},
 		},
 		{
@@ -144,7 +159,7 @@ func TestParseStatDecodesEveryEventType(t *testing.T) {
 					Direction: uint8(ebpf.CodeDirectionTransmit),
 					Bytes:     600,
 				},
-				CommonAttrs: commonAttrs(ipv4Conn),
+				CommonAttrs: commonAttrs(ipv4Conn, tcpIoPid),
 			},
 		},
 	}
@@ -203,7 +218,7 @@ func TestConnToCommonAttrsDropsUnspecifiedConnection(t *testing.T) {
 		D_addr: testIP("2001:db8::10"),
 	}
 
-	assert.Equal(t, pipe.CommonAttrs{}, connToCommonAttrs(conn))
+	assert.Equal(t, pipe.CommonAttrs{}, connToCommonAttrs(conn, 0))
 }
 
 func TestParseTCPIoBoundsBatchCount(t *testing.T) {
@@ -310,12 +325,13 @@ func testIP(value string) [net.IPv6len]uint8 {
 	return result
 }
 
-func commonAttrs(conn ebpf.Conn) pipe.CommonAttrs {
+func commonAttrs(conn ebpf.Conn, pid uint32) pipe.CommonAttrs {
 	return pipe.CommonAttrs{
 		SrcAddr: pipe.IPAddr(conn.S_addr),
 		DstAddr: pipe.IPAddr(conn.D_addr),
 		SrcPort: conn.S_port,
 		DstPort: conn.D_port,
+		PID:     pid,
 	}
 }
 
