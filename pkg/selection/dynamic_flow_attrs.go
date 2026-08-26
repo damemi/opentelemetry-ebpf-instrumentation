@@ -127,6 +127,18 @@ func (d *DynamicFlowAttrs) Apply(a *pipe.CommonAttrs) {
 	if a == nil {
 		return
 	}
+	if a.PID != 0 && d.multiSel != nil {
+		if entry, ok := d.multiSel.GetPID(a.PID); ok {
+			dec := decorationFromEntry(entry)
+			if !dec.isEmpty() {
+				if a.Metadata == nil {
+					a.Metadata = map[attr.Name]string{}
+				}
+				applyFlowDecoration(dec, a, true)
+				return
+			}
+		}
+	}
 	d.mu.RLock()
 	srcDec, srcOk := d.ipDecor[a.SrcAddr.IP().String()]
 	dstDec, dstOk := d.ipDecor[a.DstAddr.IP().String()]

@@ -128,6 +128,11 @@ func (m *MapTracer) evictFlows(ctx context.Context, forwardFlows *msg.Queue[[]*e
 	for flowKey, aggregatedMetrics := range flowsMap {
 		forwardingFlows = append(forwardingFlows, ebpf.NewRecord(flowKey, *aggregatedMetrics))
 	}
+	if pf, ok := m.mapFetcher.(pidMapFetcher); ok {
+		for pidKey, aggregatedMetrics := range pf.LookupAndDeletePIDMap() {
+			forwardingFlows = append(forwardingFlows, ebpf.NewRecordWithPID(pidKey.Id, *aggregatedMetrics, pidKey.Pid))
+		}
+	}
 	select {
 	case <-ctx.Done():
 		m.log.Debug("skipping flow eviction as agent is being stopped")
@@ -135,4 +140,8 @@ func (m *MapTracer) evictFlows(ctx context.Context, forwardFlows *msg.Queue[[]*e
 		forwardFlows.SendCtx(ctx, forwardingFlows)
 	}
 	m.log.Debug("flows evicted", "len", len(forwardingFlows))
+}
+
+type pidMapFetcher interface {
+	LookupAndDeletePIDMap() map[ebpf.NetPidFlowId]*ebpf.NetFlowMetrics
 }

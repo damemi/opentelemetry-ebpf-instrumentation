@@ -24,6 +24,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -43,7 +44,7 @@ import (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type flow_metrics_t -type flow_id_t -type flow_record_t -type packet_count_t -target amd64,arm64 NetSk ../../../../bpf/netolly/flows_sock.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type flow_metrics_t -type flow_id_t -type flow_record_t -type packet_count_t -type pid_flow_id_t -target amd64,arm64 NetSk ../../../../bpf/netolly/flows_sock.c -- -I../../../../bpf
 
 // SockFlowFetcher reads and forwards the Flows from the eBPF kernel space with a socket filter implementation.
 // It provides access both to flows that are aggregated in the kernel space (via PerfCPU hashmap)
@@ -55,6 +56,9 @@ type SockFlowFetcher struct {
 	objects       *NetSkObjects
 	ringbufReader *ringbuf.Reader
 	flowMapReader flowMapReader
+	pidFlowMap    *ebpf.Map
+	pidLastReadNS uint64
+	closables     []io.Closer
 }
 
 func NewSockFlowFetcher(
@@ -79,6 +83,9 @@ func NewSockFlowFetcher(
 	spec.Maps[aggregatedFlowsMap].MaxEntries = uint32(cacheMaxSize)
 	spec.Maps[flowDirectionsMap].MaxEntries = uint32(cacheMaxSize)
 	spec.Maps[connInitiatorsMap].MaxEntries = uint32(cacheMaxSize)
+	if pidMap := spec.Maps[aggregatedFlowsPidMap]; pidMap != nil {
+		pidMap.MaxEntries = uint32(cacheMaxSize)
+	}
 
 	convenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
 
@@ -123,6 +130,15 @@ func NewSockFlowFetcher(
 		objects:       &objects,
 		ringbufReader: flows,
 		flowMapReader: chooseMapReader(cfg.ForceBPFMapReader, objects.AggregatedFlows, cacheMaxSize, startTime),
+		pidFlowMap:    objects.AggregatedFlowsPid,
+		pidLastReadNS: startTime,
+		closables: attachSockFlowPIDProbes(tlog, sockFlowPIDPrograms{
+			tcpConnect: objects.ObiNetKprobeTcpConnect,
+			tcpSendmsg: objects.ObiNetKprobeTcpSendmsg,
+			udpSendmsg: objects.ObiNetKprobeUdpSendmsg,
+			accept:     objects.ObiNetKretprobeInetCskAccept,
+			tcpClose:   objects.ObiNetKprobeTcpClose,
+		}),
 	}, nil
 }
 
@@ -155,6 +171,11 @@ func (m *SockFlowFetcher) Close() error {
 	m.log.Debug("unregistering eBPF objects")
 
 	var errs []error
+	for _, c := range m.closables {
+		if c != nil {
+			errs = append(errs, c.Close())
+		}
+	}
 	// m.ringbufReader.Read is a blocking operation, so we need to close the ring buffer
 	// from another goroutine to avoid the system not being able to exit if there
 	// isn't traffic in a given interface
@@ -187,6 +208,26 @@ func (m *SockFlowFetcher) LookupAndDeleteMap() map[NetFlowId]*NetFlowMetrics {
 		m.log.Error("failed to read flows from eBPF map", "error", err)
 	}
 	return flows
+}
+
+func (m *SockFlowFetcher) LookupAndDeletePIDMap() map[NetPidFlowId]*NetFlowMetrics {
+	flows, lastNS, err := lookupAndDeletePidFlowMap(m.pidFlowMap, m.pidLastReadNS)
+	if err != nil {
+		m.log.Error("failed to read PID flows from eBPF map", "error", err)
+	}
+	if lastNS != 0 {
+		m.pidLastReadNS = lastNS
+	}
+	return flows
+}
+
+func (m *SockFlowFetcher) SetSelectedNetPID(pid uint32, selected bool) error {
+	m.objectsMu.Lock()
+	defer m.objectsMu.Unlock()
+	if m.objects == nil {
+		return ErrTracerTerminated
+	}
+	return setSelectedNetPID(m.objects.SelectedNetPids, pid, selected)
 }
 
 func isLittleEndian() bool {

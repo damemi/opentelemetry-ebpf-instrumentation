@@ -81,11 +81,18 @@ typedef struct flow_id_t {
     u8 _pad[1];
 } flow_id;
 
+// PID-aware flow key. Used only for selected bare-host / shared-netns processes so
+// aggregation does not merge traffic from different PIDs that share a node address.
+typedef struct pid_flow_id_t {
+    flow_id id;
+    u32 pid;
+} pid_flow_id;
+
 // Flow record is a tuple containing both flow identifier and metrics. It is used to send
 // a complete flow via ring buffer when only when the accounting hashmap is full.
 // Contents in this struct must match byte-by-byte with Go's pkc/flow/Record struct
 typedef struct flow_record_t {
     flow_metrics metrics;
     flow_id id;
-    u8 _pad[4];
+    u32 pid;
 } flow_record;

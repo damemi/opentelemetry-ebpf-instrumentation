@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 
@@ -42,16 +43,17 @@ import (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type flow_metrics_t -type flow_id_t -type flow_record_t -type packet_count_t -target amd64,arm64 Net ../../../../bpf/netolly/flows.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type flow_metrics_t -type flow_id_t -type flow_record_t -type packet_count_t -type pid_flow_id_t -target amd64,arm64 Net ../../../../bpf/netolly/flows.c -- -I../../../../bpf
 
 const (
 	// constants defined in flows.c as "volatile const"
-	constSampling      = "sampling"
-	constTraceMessages = "trace_messages"
-	constPortGuessing  = "port_guessing"
-	aggregatedFlowsMap = "aggregated_flows"
-	connInitiatorsMap  = "conn_initiators"
-	flowDirectionsMap  = "flow_directions"
+	constSampling         = "sampling"
+	constTraceMessages    = "trace_messages"
+	constPortGuessing     = "port_guessing"
+	aggregatedFlowsMap    = "aggregated_flows"
+	aggregatedFlowsPidMap = "aggregated_flows_pid"
+	connInitiatorsMap     = "conn_initiators"
+	flowDirectionsMap     = "flow_directions"
 
 	// const defined in bpf/common/globals.h as "volatile const"
 	gBpfDebug = "g_bpf_debug"
@@ -74,6 +76,9 @@ type FlowFetcher struct {
 	enableIngress bool
 	enableEgress  bool
 	flowMapReader flowMapReader
+	pidFlowMap    *ebpf.Map
+	pidLastReadNS uint64
+	closables     []io.Closer
 }
 
 func NewFlowFetcher(
@@ -100,6 +105,9 @@ func NewFlowFetcher(
 	spec.Maps[aggregatedFlowsMap].MaxEntries = uint32(cacheMaxSize)
 	spec.Maps[flowDirectionsMap].MaxEntries = uint32(cacheMaxSize)
 	spec.Maps[connInitiatorsMap].MaxEntries = uint32(cacheMaxSize)
+	if pidMap := spec.Maps[aggregatedFlowsPidMap]; pidMap != nil {
+		pidMap.MaxEntries = uint32(cacheMaxSize)
+	}
 
 	// Apply global map scaling factor
 	convenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
@@ -149,6 +157,15 @@ func NewFlowFetcher(
 		enableIngress: ingress,
 		enableEgress:  egress,
 		flowMapReader: chooseMapReader(cfg.ForceBPFMapReader, objects.AggregatedFlows, cacheMaxSize, startTime),
+		pidFlowMap:    objects.AggregatedFlowsPid,
+		pidLastReadNS: startTime,
+		closables: attachSockFlowPIDProbes(tlog, sockFlowPIDPrograms{
+			tcpConnect: objects.ObiNetKprobeTcpConnect,
+			tcpSendmsg: objects.ObiNetKprobeTcpSendmsg,
+			udpSendmsg: objects.ObiNetKprobeUdpSendmsg,
+			accept:     objects.ObiNetKretprobeInetCskAccept,
+			tcpClose:   objects.ObiNetKprobeTcpClose,
+		}),
 	}
 
 	// errors are not critical for this tracer
@@ -167,6 +184,11 @@ func (m *FlowFetcher) Close() error {
 	m.tcManager.Shutdown()
 
 	var errs []error
+	for _, c := range m.closables {
+		if c != nil {
+			errs = append(errs, c.Close())
+		}
+	}
 	// m.ringbufReader.Read is a blocking operation, so we need to close the ring buffer
 	// from another goroutine to avoid the system not being able to exit if there
 	// isn't traffic in a given interface
@@ -216,6 +238,26 @@ func (m *FlowFetcher) LookupAndDeleteMap() map[NetFlowId]*NetFlowMetrics {
 		m.log.Error("failed to read flows from eBPF map", "error", err)
 	}
 	return flows
+}
+
+func (m *FlowFetcher) LookupAndDeletePIDMap() map[NetPidFlowId]*NetFlowMetrics {
+	flows, lastNS, err := lookupAndDeletePidFlowMap(m.pidFlowMap, m.pidLastReadNS)
+	if err != nil {
+		m.log.Error("failed to read PID flows from eBPF map", "error", err)
+	}
+	if lastNS != 0 {
+		m.pidLastReadNS = lastNS
+	}
+	return flows
+}
+
+func (m *FlowFetcher) SetSelectedNetPID(pid uint32, selected bool) error {
+	m.objectsMu.Lock()
+	defer m.objectsMu.Unlock()
+	if m.objects == nil {
+		return ErrTracerTerminated
+	}
+	return setSelectedNetPID(m.objects.SelectedNetPids, pid, selected)
 }
 
 func (m *FlowFetcher) logTCErrors(errors chan error) {

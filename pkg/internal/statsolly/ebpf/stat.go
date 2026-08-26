@@ -121,6 +121,7 @@ type StatsTCPRtt struct {
 	Role   uint8
 	Pad    [2]uint8
 	SrttUs uint32
+	Pid    uint32
 	Conn
 }
 
@@ -130,6 +131,7 @@ type StatsTCPFailedConnection struct {
 	Reason uint8
 	Role   uint8
 	Pad    [1]uint8
+	Pid    uint32
 	Conn
 }
 
@@ -137,6 +139,7 @@ type StatsTCPRetransmit struct {
 	_     structs.HostLayout
 	Flags uint8
 	Pad   [3]uint8
+	Pid   uint32
 	Conn
 }
 
@@ -146,6 +149,7 @@ type StatsTCPIo struct {
 	Direction uint8
 	Count     uint8
 	Pad       [1]uint8
+	Pid       uint32
 	Bytes     [TCPIoBatchSize]uint32
 	Conn
 }

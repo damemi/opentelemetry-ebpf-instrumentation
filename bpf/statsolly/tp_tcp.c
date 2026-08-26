@@ -15,6 +15,8 @@
 #include <statsolly/types.h>
 #include <statsolly/maps/stats_events.h>
 #include <statsolly/maps/sock_role.h>
+#include <statsolly/maps/sock_pid.h>
+#include <pid/pid_helpers.h>
 
 #ifndef ECONNREFUSED
 #define ECONNREFUSED 111
@@ -56,12 +58,14 @@ typedef struct tcp_failed_connection {
     enum tcp_fail_reason reason;
     enum tcp_handshake_role role;
     u8 _pad[1];
+    u32 pid;
     connection_info_t conn;
 } tcp_failed_connection_t;
 
 typedef struct tcp_retransmit {
     u8 flags; // Must be first, we use it to tell what kind of event we have on the ring buffer
     u8 _pad[3];
+    u32 pid;
     connection_info_t conn;
 } tcp_retransmit_t;
 
@@ -146,6 +150,8 @@ int obi_stats_tp_inet_sock_set_state_tcp_failed_connection(
     se->flags = k_event_stat_tcp_failed_connection;
     se->reason = reason;
     se->conn = conn;
+    const u32 *pidp = bpf_map_lookup_elem(&sock_pid, &sk);
+    se->pid = pidp ? *pidp : pid_from_pid_tgid(bpf_get_current_pid_tgid());
 
     const u8 *role_ptr = bpf_map_lookup_elem(&sock_role, &sk);
     if (role_ptr) {
@@ -182,6 +188,8 @@ int obi_stats_raw_tp_tcp_retransmit_skb(struct bpf_raw_tracepoint_args *ctx) {
 
     se->flags = k_event_stat_tcp_retransmit;
     se->conn = conn;
+    const u32 *pidp = bpf_map_lookup_elem(&sock_pid, &sk);
+    se->pid = pidp ? *pidp : pid_from_pid_tgid(bpf_get_current_pid_tgid());
 
     bpf_ringbuf_submit(se, stats_events_flags());
 

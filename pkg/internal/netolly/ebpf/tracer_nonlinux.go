@@ -41,6 +41,14 @@ func (m *FlowFetcher) LookupAndDeleteMap() map[NetFlowId]*NetFlowMetrics {
 	return nil
 }
 
+func (m *FlowFetcher) LookupAndDeletePIDMap() map[NetPidFlowId]*NetFlowMetrics {
+	return nil
+}
+
+func (m *FlowFetcher) SetSelectedNetPID(uint32, bool) error {
+	return nil
+}
+
 func (m *FlowFetcher) LookupPacketStats() (NetPacketCount, error) {
 	return NetPacketCount{}, ErrTracerTerminated
 }

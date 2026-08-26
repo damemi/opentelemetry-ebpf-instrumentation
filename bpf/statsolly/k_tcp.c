@@ -18,17 +18,35 @@
 #include <statsolly/maps/sock_role.h>
 #include <statsolly/maps/tcp_sendmsg_sock.h>
 #include <statsolly/maps/tcp_io_accum.h>
+#include <statsolly/maps/sock_pid.h>
+#include <pid/pid_helpers.h>
 
 enum {
     k_usec_per_sec = 1000000ULL,
     k_max_srtt_allowed = 60 * k_usec_per_sec,
 };
 
+static __always_inline void remember_sock_pid(struct sock *sk) {
+    const u32 pid = pid_from_pid_tgid(bpf_get_current_pid_tgid());
+    if (pid) {
+        bpf_map_update_elem(&sock_pid, &sk, &pid, BPF_ANY);
+    }
+}
+
+static __always_inline u32 owner_pid(struct sock *sk) {
+    const u32 *pid = bpf_map_lookup_elem(&sock_pid, &sk);
+    if (pid) {
+        return *pid;
+    }
+    return pid_from_pid_tgid(bpf_get_current_pid_tgid());
+}
+
 typedef struct tcp_rtt {
     u8 flags; // Must be first, we use it to tell what kind of event we have on the ring buffer
     enum tcp_handshake_role role;
     u8 _pad[2];
     u32 srtt_us;
+    u32 pid;
     connection_info_t conn;
 } tcp_rtt_t;
 
@@ -37,6 +55,7 @@ typedef struct tcp_io {
     enum network_io_direction direction;
     u8 count;
     u8 _pad[1];
+    u32 pid;
     u32 bytes[k_tcp_io_batch_size];
     connection_info_t conn;
 } tcp_io_t;
@@ -61,6 +80,7 @@ static __always_inline void flush_tcp_io_accum(struct sock *sk,
     se->flags = k_event_stat_tcp_io;
     se->direction = direction;
     se->count = accum->count;
+    se->pid = accum->pid;
     bpf_memcpy(se->bytes, accum->bytes, sizeof(se->bytes));
     se->conn = conn;
     bpf_ringbuf_submit(se, stats_events_flags());
@@ -87,6 +107,7 @@ accumulate_tcp_io(struct sock *sk, enum network_io_direction direction, u32 byte
         tcp_io_accum_t new_accum = {};
         new_accum.bytes[0] = bytes;
         new_accum.count = 1;
+        new_accum.pid = owner_pid(sk);
         if (bpf_map_update_elem(&tcp_io_accum, &key, &new_accum, BPF_NOEXIST) != 0) {
             bpf_d_printk("tcp_io_accum map full, dropping %u bytes", bytes);
         }
@@ -108,6 +129,7 @@ int BPF_KPROBE(obi_stats_kprobe_tcp_close_io_flush, struct sock *sk) {
     (void)ctx;
     flush_and_delete_io_accum(sk, direction_transmit);
     flush_and_delete_io_accum(sk, direction_receive);
+    bpf_map_delete_elem(&sock_pid, &sk);
     return 0;
 }
 
@@ -143,6 +165,7 @@ int BPF_KPROBE(obi_stats_kprobe_tcp_close_srtt, struct sock *sk) {
 
     se->flags = k_event_stat_tcp_rtt;
     se->srtt_us = srtt_us;
+    se->pid = owner_pid(sk);
     se->conn = conn;
     const u8 *role_ptr = bpf_map_lookup_elem(&sock_role, &sk);
     se->role = role_ptr ? *role_ptr : role_unknown;
@@ -161,6 +184,7 @@ int BPF_KPROBE(obi_stats_kprobe_tcp_sendmsg, struct sock *sk, struct msghdr *msg
     (void)size;
     const u64 pid_tgid = bpf_get_current_pid_tgid();
     bpf_map_update_elem(&tcp_sendmsg_sock, &pid_tgid, &sk, BPF_ANY);
+    remember_sock_pid(sk);
     return 0;
 }
 
@@ -192,6 +216,7 @@ int BPF_KPROBE(obi_stats_kprobe_tcp_cleanup_rbuf, struct sock *sk, int copied) {
         return 0;
     }
 
+    remember_sock_pid(sk);
     accumulate_tcp_io(sk, direction_receive, (u32)copied);
     return 0;
 }

@@ -69,6 +69,14 @@ func NewRecord(
 	key NetFlowId,
 	metrics NetFlowMetrics,
 ) *Record {
+	return NewRecordWithPID(key, metrics, 0)
+}
+
+func NewRecordWithPID(
+	key NetFlowId,
+	metrics NetFlowMetrics,
+	pid uint32,
+) *Record {
 	return &Record{
 		id:      key,
 		Metrics: metrics,
@@ -77,6 +85,7 @@ func NewRecord(
 			DstPort: key.DstPort,
 			SrcAddr: pipe.IPAddr(key.SrcIp.In6U.U6Addr8),
 			DstAddr: pipe.IPAddr(key.DstIp.In6U.U6Addr8),
+			PID:     pid,
 		},
 		NetAttrs: NetAttrs{
 			IfIndex:           key.IfIndex,

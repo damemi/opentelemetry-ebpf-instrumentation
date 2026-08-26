@@ -135,6 +135,34 @@ func TestDynamicAppIPs_twoSelectedInSharedNetNS_neitherGetsHostIPs(t *testing.T)
 	assert.False(t, tracker.Allows(&pipe.CommonAttrs{SrcAddr: host, DstAddr: other}))
 }
 
+func TestDynamicAppIPs_Allows_pidAdmitsSelectedBareHost(t *testing.T) {
+	stubSharedHostNetNS(t)
+
+	sel := &stubPIDSelector{pids: []app.PID{100}}
+	tracker := NewDynamicAppIPs(sel, nil)
+	tracker.addBatch([]app.PID{100})
+
+	host := pipe.IPAddr(net.ParseIP("192.168.1.10"))
+	other := pipe.IPAddr(net.ParseIP("8.8.8.8"))
+	assert.True(t, tracker.Allows(&pipe.CommonAttrs{SrcAddr: host, DstAddr: other, PID: 100}))
+	assert.False(t, tracker.Allows(&pipe.CommonAttrs{SrcAddr: host, DstAddr: other, PID: 999}))
+	assert.False(t, tracker.Allows(&pipe.CommonAttrs{SrcAddr: host, DstAddr: other}))
+}
+
+func TestDynamicAppIPs_Allows_pidDistinguishesTwoSelectedHostProcesses(t *testing.T) {
+	stubSharedHostNetNS(t)
+
+	sel := &stubPIDSelector{pids: []app.PID{10, 20}}
+	tracker := NewDynamicAppIPs(sel, nil)
+	tracker.addBatch([]app.PID{10, 20})
+
+	host := pipe.IPAddr(net.ParseIP("192.168.1.10"))
+	other := pipe.IPAddr(net.ParseIP("8.8.8.8"))
+	assert.True(t, tracker.Allows(&pipe.CommonAttrs{SrcAddr: host, DstAddr: other, PID: 10}))
+	assert.True(t, tracker.Allows(&pipe.CommonAttrs{SrcAddr: host, DstAddr: other, PID: 20}))
+	assert.False(t, tracker.Allows(&pipe.CommonAttrs{SrcAddr: host, DstAddr: other, PID: 30}))
+}
+
 func TestDynamicAppIPs_twoIsolatedNetNS_eachKeepsOwnIP(t *testing.T) {
 	stubIsolatedProcessIPs(t, func(pid app.PID) []string {
 		switch pid {

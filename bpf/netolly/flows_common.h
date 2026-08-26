@@ -6,6 +6,10 @@
 #include <bpfcore/vmlinux.h>
 #include <bpfcore/bpf_helpers.h>
 
+#include <common/connection_info.h>
+#include <common/map_sizing.h>
+#include <common/pin_internal.h>
+
 #include <netolly/flow.h>
 
 #define DISCARD 1
@@ -53,6 +57,33 @@ struct {
     __type(key, flow_id);
     __type(value, flow_metrics);
 } aggregated_flows SEC(".maps");
+
+// Selected NetworkMetrics PIDs (host-side). Kprobes only record sockets for these PIDs.
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, u32);
+    __type(value, u8);
+    __uint(pinning, OBI_PIN_INTERNAL);
+} selected_net_pids SEC(".maps");
+
+// Sorted 5-tuple → owning PID, filled from process-aware kprobes.
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, MAX_CONCURRENT_SHARED_REQUESTS);
+    __type(key, connection_info_t);
+    __type(value, u32);
+    __uint(pinning, OBI_PIN_INTERNAL);
+} sock_flow_pids SEC(".maps");
+
+// Same metrics as aggregated_flows, keyed by flow_id + PID so shared-netns
+// processes are not merged. Only written when sock_flow_pids hits.
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH);
+    __type(key, pid_flow_id);
+    __type(value, flow_metrics);
+    __uint(pinning, OBI_PIN_INTERNAL);
+} aggregated_flows_pid SEC(".maps");
 
 typedef struct packet_count_t {
     u64 total;
@@ -208,4 +239,113 @@ static inline u8 get_connection_initiator(flow_id *id, u16 flags) {
     }
 
     return flow_initiator;
+}
+
+static __always_inline u32 lookup_flow_owner_pid(const flow_id *id) {
+    connection_info_t conn;
+    __builtin_memset(&conn, 0, sizeof(conn));
+    __builtin_memcpy(conn.s_addr, id->src_ip.s6_addr, IP_V6_ADDR_LEN);
+    __builtin_memcpy(conn.d_addr, id->dst_ip.s6_addr, IP_V6_ADDR_LEN);
+    conn.s_port = id->src_port;
+    conn.d_port = id->dst_port;
+    sort_connection_info(&conn);
+
+    const u32 *pid = bpf_map_lookup_elem(&sock_flow_pids, &conn);
+    if (!pid) {
+        return 0;
+    }
+    return *pid;
+}
+
+// Accounts the packet in aggregated_flows_pid when a selected PID owns the
+// connection. Returns 1 if the packet was consumed by the PID path (do not
+// also write aggregated_flows — that would double-count).
+static __always_inline int try_account_pid_flow(const flow_id *id,
+                                                struct __sk_buff *skb,
+                                                u16 flags,
+                                                u64 current_time,
+                                                packet_count *packet_stats) {
+    const u32 pid = lookup_flow_owner_pid(id);
+    if (!pid) {
+        return 0;
+    }
+
+    pid_flow_id pid_id;
+    __builtin_memset(&pid_id, 0, sizeof(pid_id));
+    pid_id.id = *id;
+    pid_id.pid = pid;
+
+    flow_metrics *aggregate_flow =
+        (flow_metrics *)bpf_map_lookup_elem(&aggregated_flows_pid, &pid_id);
+    if (aggregate_flow) {
+        aggregate_flow->packets += 1;
+        aggregate_flow->bytes += skb->len;
+        aggregate_flow->end_mono_time_ns = current_time;
+        if (aggregate_flow->start_mono_time_ns == 0) {
+            aggregate_flow->start_mono_time_ns = current_time;
+        }
+        aggregate_flow->flags |= flags;
+
+        const long ret =
+            bpf_map_update_elem(&aggregated_flows_pid, &pid_id, aggregate_flow, BPF_ANY);
+        if (trace_messages && ret != 0) {
+            bpf_dbg_printk("error updating pid flow, ret=%d. Bytes=%d\n", ret, skb->len);
+            if (packet_stats) {
+                packet_stats->ignored++;
+            }
+        }
+        return 1;
+    }
+
+    flow_metrics new_flow = {
+        .packets = 1,
+        .bytes = skb->len,
+        .start_mono_time_ns = current_time,
+        .end_mono_time_ns = current_time,
+        .flags = flags,
+        .iface_direction = UNKNOWN,
+        .initiator = INITIATOR_UNKNOWN,
+    };
+
+    u8 *direction = (u8 *)bpf_map_lookup_elem(&flow_directions, id);
+    if (direction == NULL) {
+        if ((flags & SYN_ACK_FLAG) == SYN_ACK_FLAG) {
+            new_flow.iface_direction = INGRESS;
+        } else if ((flags & SYN_FLAG) == SYN_FLAG) {
+            new_flow.iface_direction = EGRESS;
+        }
+        if (new_flow.iface_direction != UNKNOWN) {
+            bpf_map_update_elem(&flow_directions, id, &new_flow.iface_direction, BPF_NOEXIST);
+        } else if (port_guessing == PORT_GUESSING_ORDINAL) {
+            new_flow.iface_direction = INGRESS;
+            if (id->src_port > id->dst_port) {
+                new_flow.iface_direction = EGRESS;
+            }
+        }
+    } else {
+        new_flow.iface_direction = *direction;
+    }
+
+    new_flow.initiator = get_connection_initiator((flow_id *)id, flags);
+
+    const long ret = bpf_map_update_elem(&aggregated_flows_pid, &pid_id, &new_flow, BPF_ANY);
+    if (ret != 0) {
+        if (trace_messages) {
+            bpf_dbg_printk("error adding pid flow, ret=%d. Bytes=%d\n", ret, skb->len);
+        }
+        new_flow.errno = -ret;
+        flow_record *record =
+            (flow_record *)bpf_ringbuf_reserve(&direct_flows, sizeof(flow_record), 0);
+        if (!record) {
+            if (packet_stats) {
+                packet_stats->ignored++;
+            }
+            return 1;
+        }
+        record->id = *id;
+        record->metrics = new_flow;
+        record->pid = pid;
+        bpf_ringbuf_submit(record, 0);
+    }
+    return 1;
 }

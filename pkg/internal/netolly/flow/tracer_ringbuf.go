@@ -120,7 +120,7 @@ func (m *RingBufTracer) listenAndForwardRingBuffer(ctx context.Context, debuggin
 		m.mapFlusher.Flush()
 	}
 
-	forwardCh.SendCtx(ctx, []*ebpf.Record{ebpf.NewRecord(readFlow.Id, readFlow.Metrics)})
+	forwardCh.SendCtx(ctx, []*ebpf.Record{ebpf.NewRecordWithPID(readFlow.Id, readFlow.Metrics, readFlow.Pid)})
 
 	return nil
 }

@@ -142,8 +142,8 @@ var isIsolatedNetNS = netns.IsIsolated
 // the store has no entry for the PID) fall back to addresses in an isolated
 // container network namespace (Docker/containerd bridge). Processes that share
 // the host or agent netns are not identified by interface address: those IPs
-// are shared with unselected traffic and CommonAttrs has no PID to recover
-// ownership.
+// are shared with unselected traffic. Bare-host ownership uses CommonAttrs.PID
+// from a process-aware hook instead.
 //
 // When store is non-nil the PID is registered via AddProcess; callers that invoke
 // this outside DynamicAppIPs must call store.DeleteProcess when the PID is no
@@ -171,12 +171,19 @@ func ResolveContainerIPs(store *kube.Store, pid app.PID) []string {
 
 // Allows returns whether a flow/stat record should be exported for the current dynamic selection.
 // When the selector is empty, nothing is allowed (exclusive mode, matching DynamicMatcher).
+//
+// Records with PID set are admitted only if that PID is selected. This is the bare-host
+// path: ownership comes from a process-aware hook, not from a shared host address.
+// Records without PID keep the IP path used for Kubernetes and isolated container netns.
 func (d *DynamicAppIPs) Allows(attrs *pipe.CommonAttrs) bool {
 	if d.selector == nil {
 		return true
 	}
 	if pids, ok := d.selector.GetPIDs(); !ok || len(pids) == 0 {
 		return false
+	}
+	if attrs.PID != 0 {
+		return d.selector.IncludesPID(app.PID(attrs.PID))
 	}
 	src := attrs.SrcAddr.IP().String()
 	dst := attrs.DstAddr.IP().String()

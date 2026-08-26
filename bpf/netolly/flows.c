@@ -176,6 +176,10 @@ static inline int flow_monitor(struct __sk_buff *skb) {
         packet_stats->total++;
     }
 
+    if (try_account_pid_flow(&id, skb, flags, current_time, packet_stats)) {
+        goto cleanup;
+    }
+
     // TODO: we need to add spinlock here when we deprecate versions prior to 5.1, or provide
     // a spinlocked alternative version and use it selectively https://lwn.net/Articles/779120/
     flow_metrics *aggregate_flow = (flow_metrics *)bpf_map_lookup_elem(&aggregated_flows, &id);
@@ -276,6 +280,7 @@ static inline int flow_monitor(struct __sk_buff *skb) {
             }
             record->id = id;
             record->metrics = new_flow;
+            record->pid = 0;
             bpf_ringbuf_submit(record, 0);
         }
     }
@@ -302,5 +307,8 @@ int obi_egress_flow_parse(struct __sk_buff *skb) {
 const flow_metrics *unused_flow_metrics __attribute__((unused));
 const flow_id *unused_flow_id __attribute__((unused));
 const flow_record *unused_flow_record __attribute__((unused));
+const pid_flow_id *unused_pid_flow_id __attribute__((unused));
+
+#include <netolly/sock_pid.c>
 
 char _license[] SEC("license") = "GPL";

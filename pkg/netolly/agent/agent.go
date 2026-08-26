@@ -32,6 +32,7 @@ import (
 
 	cebpf "github.com/cilium/ebpf"
 
+	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/ebpf/ringbuf"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/logger"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/tcmanager"
@@ -41,6 +42,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/obi"
 	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
+	"go.opentelemetry.io/obi/pkg/selection"
 )
 
 const (
@@ -116,6 +118,7 @@ type ebpfFlowFetcher interface {
 
 	LookupPacketStats() (ebpf.NetPacketCount, error)
 	DebugEventsMap() *cebpf.Map
+	SetSelectedNetPID(pid uint32, selected bool) error
 }
 
 // FlowsAgent instantiates a new agent, given a configuration.
@@ -259,6 +262,8 @@ func (f *Flows) Run(ctx context.Context) error {
 
 	f.ifaceManager.Start(ctx)
 
+	f.syncSelectedNetPIDs(runCtx)
+
 	f.graph.Start(ctx, swarm.WithCancelTimeout(f.cfg.ShutdownTimeout))
 	f.status = StatusStarted
 
@@ -312,4 +317,57 @@ func (f *Flows) stop() error {
 
 func (f *Flows) Status() Status {
 	return f.status
+}
+
+func (f *Flows) syncSelectedNetPIDs(ctx context.Context) {
+	if f.ctxInfo == nil || f.ctxInfo.DynamicPIDSelector == nil || f.ebpf == nil {
+		return
+	}
+	sel := f.ctxInfo.DynamicPIDSelector.NetworkMetrics()
+	if sel == nil {
+		return
+	}
+
+	set := func(pids []app.PID, selected bool) {
+		for _, pid := range pids {
+			if err := f.ebpf.SetSelectedNetPID(uint32(pid), selected); err != nil {
+				alog().Debug("updating selected net PID map",
+					"pid", pid, "selected", selected, "error", err)
+			}
+		}
+	}
+
+	if pids, ok := sel.GetPIDs(); ok {
+		set(pids, true)
+	}
+
+	go func() {
+		ch := selection.AddedPIDsNotifyContext(ctx, sel)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case pids, ok := <-ch:
+				if !ok {
+					return
+				}
+				set(pids, true)
+			}
+		}
+	}()
+
+	go func() {
+		ch := selection.RemovedNotifyContext(ctx, sel)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case pids, ok := <-ch:
+				if !ok {
+					return
+				}
+				set(pids, false)
+			}
+		}
+	}()
 }

@@ -36,6 +36,11 @@ type CommonAttrs struct {
 	// OBIIP provides information about the source of the flow (the Agent that traced it)
 	OBIIP    string
 	Metadata map[attr.Name]string
+
+	// PID is the local process that owns this record, when known. It is set from a
+	// process-aware hook (socket/kprobe), not from TC current-task. Zero means unknown.
+	// Dynamic NetO11y/StatsO11y use it to filter and decorate bare-host processes.
+	PID uint32
 }
 
 // IP returns the net.IP equivalent object

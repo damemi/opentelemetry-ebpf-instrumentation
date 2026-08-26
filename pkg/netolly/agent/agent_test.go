@@ -61,6 +61,8 @@ func (testEBPFFetcher) Close() error { return nil }
 
 func (testEBPFFetcher) LookupAndDeleteMap() map[ebpf.NetFlowId]*ebpf.NetFlowMetrics { return nil }
 
+func (testEBPFFetcher) SetSelectedNetPID(uint32, bool) error { return nil }
+
 func (testEBPFFetcher) ReadRingBuf() (ringbuf.Record, error) { return ringbuf.Record{}, io.EOF }
 
 func (testEBPFFetcher) LookupPacketStats() (ebpf.NetPacketCount, error) {

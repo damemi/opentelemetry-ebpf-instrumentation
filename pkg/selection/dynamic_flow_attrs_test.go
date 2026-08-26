@@ -203,6 +203,37 @@ func TestDynamicFlowAttrs_rebuild_twoSelectedSharedNetNS_noLastWriterWins(t *tes
 	assert.Nil(t, flow.Metadata)
 }
 
+func TestDynamicFlowAttrs_Apply_pidDecoratesBareHostWithoutSharedIP(t *testing.T) {
+	stubSharedHostNetNS(t)
+
+	sel := &stubMultiPIDSelector{
+		stubPIDSelector: stubPIDSelector{pids: []app.PID{10, 20}},
+		entries: map[app.PID]DynamicPIDEntry{
+			10: {PID: 10, ServiceName: "sshd"},
+			20: {PID: 20, ServiceName: "nginx"},
+		},
+	}
+	tracker := NewDynamicFlowAttrs(sel, sel, nil)
+	tracker.rebuild()
+
+	host := pipe.IPAddr(net.ParseIP("192.168.1.10"))
+	other := pipe.IPAddr(net.ParseIP("8.8.8.8"))
+
+	sshd := &pipe.CommonAttrs{SrcAddr: host, DstAddr: other, PID: 10}
+	tracker.Apply(sshd)
+	require.NotNil(t, sshd.Metadata)
+	assert.Equal(t, "sshd", sshd.Metadata[attr.ServiceName])
+
+	nginx := &pipe.CommonAttrs{SrcAddr: host, DstAddr: other, PID: 20}
+	tracker.Apply(nginx)
+	require.NotNil(t, nginx.Metadata)
+	assert.Equal(t, "nginx", nginx.Metadata[attr.ServiceName])
+
+	unselected := &pipe.CommonAttrs{SrcAddr: host, DstAddr: other, PID: 30}
+	tracker.Apply(unselected)
+	assert.Nil(t, unselected.Metadata)
+}
+
 func TestDynamicFlowAttrs_rebuild_twoIsolatedNetNS_eachKeepsOwnAttrs(t *testing.T) {
 	stubIsolatedProcessIPs(t, func(pid app.PID) []string {
 		switch pid {

@@ -42,3 +42,13 @@ func TestAccumulate(t *testing.T) {
 		})
 	}
 }
+
+func TestNewRecordWithPID(t *testing.T) {
+	rec := NewRecordWithPID(NetFlowId{SrcPort: 80, DstPort: 443, IfIndex: 1}, NetFlowMetrics{Packets: 3}, 42)
+	assert.Equal(t, uint32(42), rec.CommonAttrs.PID)
+	assert.EqualValues(t, 80, rec.CommonAttrs.SrcPort)
+	assert.Equal(t, uint32(1), rec.NetAttrs.IfIndex)
+
+	plain := NewRecord(NetFlowId{SrcPort: 80}, NetFlowMetrics{})
+	assert.Zero(t, plain.CommonAttrs.PID)
+}
